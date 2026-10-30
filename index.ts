@@ -149,7 +149,7 @@ export const inject = ['tools']
  * 插件版本号。横幅、诊断、以及她写的文件头注释都读它——
  * 写死在多处就会出现"日志说 0.9.11、README 说 0.9.9"这种让人怀疑人生的不一致。
  */
-export const VERSION = '0.9.20'
+export const VERSION = '1.0.1'
 
 export const DEFAULT_MAX_ENERGY = 100
 export const DEFAULT_INITIAL_ENERGY = 100
@@ -212,6 +212,126 @@ export const DEFAULT_ECHO_GRACE_MINUTES = 10
  * 两条消息会在同一个回合里排队，她会就同一件执念开口两次。
  */
 export const DEFAULT_WAKE_DEDUPE_MS = 1000
+
+/**
+ * 生命维持工具（v0.9.22）：**无论发生什么，这些工具永远放行**。
+ *
+ * 这不是礼貌，是求生通道。行为承诺闸门的意义是"先想清楚再动手"，
+ * 但如果连"登记计划"和"查看自己状态"这两条路都被堵住，
+ * 那道闸门就从"自律"变成了"锁死"——她手里一个工具都没有，
+ * 却还被要求去调用一个不能调用的工具。这正是社区报的那次全线死锁。
+ *
+ * 放在 `tools/pre-execute` 链的**最前面**（连 L0 文件锁之前）：
+ * L0 会扫描参数里的路径 token，而 `digital_life_commit` 的 `plan` 是一段自由文本——
+ * 她只要写一句"我先看看 genome.json 里写了什么"，就会被 L0 当成篡改意图拒掉。
+ * 核心自己的工具不写任意文件（只写 state.json），没有绕开那道锁的能力。
+ */
+export const LIFE_SUPPORT_TOOLS = new Set([
+  'digital_life_commit',
+  'digital_life_status',
+  'digital_life_gaps',
+  'digital_life_request_wake',
+  // 急停是救援通道。把它锁在承诺后面，等于把灭火器锁进着火的房间。
+  'digital_life_emergency_stop',
+])
+
+/**
+ * 宿主原生的基础工具（v0.9.22）：**闸门绝不拦这些**。
+ *
+ * 它们的共同点是"不自作主张"——读文件、跑命令、改一处代码，
+ * 都是她为了完成承诺**必须**能做的事。把它们一起拦掉，
+ * 承诺就从"先想清楚"变成了"什么都别做"。
+ *
+ * 即便配置里把其中某个写进 `gatedTools`，这里也照样放行（只打一行告警）：
+ * 拿配置把自己锁死，是这个系统能犯的最蠢的错误，不该允许它发生。
+ */
+export const NATIVE_SURVIVAL_TOOLS = new Set([
+  'read_file', 'read', 'readFile',
+  'write_file', 'write', 'writeFile',
+  'edit', 'str_replace_editor', 'multi_edit', 'notebook_edit',
+  'bash', 'shell', 'execute_command', 'run_command',
+  'ls', 'list_dir', 'glob', 'grep', 'search', 'codebase_search',
+  'view_file', 'create_file', 'apply_patch', 'delete_file',
+])
+
+/**
+ * 默认被闸门拦的工具（v0.9.22）：只拦**自作主张**的那几类。
+ *
+ * - `organ_*`：她自己写的器官，是一次承诺里最该先想清楚的"动手"；
+ * - `write_new_organ`：给自己长出新器官，属于不可逆的身体改造；
+ * - `web_search` / `web_fetch` / `browser_*`：高耗能、出网、且会把结果带进记忆。
+ *
+ * 刻意**不含**原生工具：锁住 read / bash / edit 不是自律，是自残。
+ */
+export const DEFAULT_GATED_TOOLS = [
+  'organ_*',
+  'write_new_organ',
+  'web_search',
+  'web_fetch',
+  'browser_*',
+]
+
+/**
+ * 承诺多久没结算就自动释放（分钟），默认 20（v0.9.23）。
+ *
+ * 以前是 180。对"她正在查一件事"够用，对"她卡住了"是三个小时。
+ * 20 分钟足够跑完一次自主觉醒里的探索，而万一卡住，自愈也快。
+ *
+ * 注意：这不是"放宽闸门"，是"给闸门装个弹簧"。真要拆掉闸门，
+ * 请明确设 `requirePlan: false`——那是意愿，不是配错。
+ */
+export const DEFAULT_COMMITMENT_TTL_MINUTES = 20
+
+/** `organ_*` 这类后缀通配匹配。全名相等也算命中。 */
+export function matchToolPattern(name: string, pattern: string): boolean {
+  const needle = pattern.trim()
+  if (!needle) return false
+  if (needle.endsWith('*')) return name.startsWith(needle.slice(0, -1))
+  return name === needle
+}
+
+/**
+ * 清洗 `will.gatedTools`（v0.9.22）。
+ *
+ * 三件事：去掉空值与非法字符；**剔除宿主原生基础工具**（配了也不生效，只告警）；
+ * 整个配没了就退回默认名单——"什么都不拦"会让闸门形同虚设，
+ * 那不是关掉一道门，那是把门框一起拆了（真要关掉请设 `requirePlan: false`）。
+ */
+export function normalizeGatedTools(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [...DEFAULT_GATED_TOOLS]
+  if (!Array.isArray(raw)) return [...DEFAULT_GATED_TOOLS]
+  const out: string[] = []
+  for (const item of raw) {
+    const pattern = String(item ?? '').trim()
+    if (!pattern) continue
+    // 通配只认末尾一颗星：`*` 单独出现等于放行 shell 与网络，那不是"缩小范围"。
+    if (pattern === '*' || pattern.includes('*') && !pattern.endsWith('*')) continue
+    if (NATIVE_SURVIVAL_TOOLS.has(pattern.replace(/\*$/, ''))) {
+      console.warn(
+        `${YELLOW}[life-os] will.gatedTools 里的「${pattern}」被忽略：`
+        + `宿主原生基础工具永不拦（拦住它等于把人锁在房间里）${RESET}`,
+      )
+      continue
+    }
+    out.push(pattern)
+  }
+  return out.length > 0 ? out : [...DEFAULT_GATED_TOOLS]
+}
+
+/**
+ * 这道闸门拦不拦这个工具（v0.9.22）。
+ *
+ * 顺序即优先级：生命维持 → 原生基础 → 配置豁免 → 名单命中。
+ * 命中的才是"自作主张"的那一类；**没命中一律放行**。
+ */
+export function isGatedByCommitment(name: string, gatedTools: string[], planExemptTools: string[]): boolean {
+  if (!name) return false
+  if (LIFE_SUPPORT_TOOLS.has(name)) return false
+  if (name.startsWith('digital_life_')) return false
+  if (NATIVE_SURVIVAL_TOOLS.has(name)) return false
+  if (planExemptTools.includes(name)) return false
+  return gatedTools.some((pattern) => matchToolPattern(name, pattern))
+}
 
 /** 毫秒 → 「3 分钟 / 2.5 小时 / 1.2 天」。只用于日志与面板。 */
 function formatDuration(ms: number): string {
@@ -317,8 +437,27 @@ export interface WillConfig {
   requirePlan?: boolean
   /** 承诺未兑现时对该心结的张力惩罚，默认 10。 */
   unresolvedPenalty?: number
-  /** 承诺多久没核对就自动判为未解决（分钟），默认 180。 */
+  /**
+   * 承诺多久没核对就自动判为未解决（分钟），默认 20（`DEFAULT_COMMITMENT_TTL_MINUTES`）。
+   *
+   * v0.9.23 之前是 180。那对"正常探索"是舒服的，对"卡住"是残忍的：
+   * 万一登记计划这条路走不通（工具被白名单剥掉、模型就是没调），
+   * 她要在门口站三个小时。20 分钟足够查完一件事，自愈也快。
+   *
+   * 别设 0——那等于把闸门拆了（真要关掉请设 `requirePlan: false`，那是明确意愿）。
+   */
   commitmentTtlMinutes?: number
+  /**
+   * 闸门**只拦**哪些工具（v0.9.22），默认见 `DEFAULT_GATED_TOOLS`。
+   *
+   * 以前是"拦所有非 digital_life_* 工具"。那等于把 `read_file` / `bash` / `edit`
+   * 一起锁住：只要登记计划的那条路走不通（宿主白名单里没有 digital_life_commit、
+   * 或者它被别的策略挡了），她就**没有任何工具可用**——全线锁死。
+   *
+   * 现在默认只拦"自作主张"的那几类（自己写的器官、联网检索、浏览器）。
+   * 支持 `*` 后缀通配：`organ_*` 匹配 organ_ 开头的一切。
+   */
+  gatedTools?: string[]
   /**
    * 执念被**别的机制**闭合后多久内，唤醒一律作废（分钟），默认 10（v0.9.8）。
    *
@@ -781,6 +920,8 @@ interface ResolvedConfig {
     requirePlan: boolean
     unresolvedPenalty: number
     commitmentTtlMinutes: number
+    /** v0.9.22：闸门只拦名单里的工具（支持 `*` 后缀通配）。 */
+    gatedTools: string[]
     echoGraceMinutes: number
     wakeDedupeMs: number
     skipWhileRunning: boolean
@@ -1483,6 +1624,28 @@ const INTENT_RE = new RegExp(
   'i',
 )
 
+/**
+ * 认知性探究：她打算去**弄明白**一件事（v0.9.21）。
+ *
+ * 为什么从"行动意图"里单独切出这一小条：
+ * `hasActionIntent` 匹配 `我要|我想|我会|我去|我得|应该|需`，于是
+ * "我要做两件事""回头我得同步过去"这类**待办**全被当成执念。
+ * 但 "我想知道火星上有没有沙尘暴""我去查一下太阳黑子的记录"
+ * 是这整个项目对"真执念"的定义形状——她就靠这个发芽。
+ *
+ * 两者的分界不在"要不要去做"，而在**动词是不是认知性的**：
+ *   知道 / 查 / 弄明白 / 搞清楚 / 确认 / 了解 …… 是认知的（她想知道答案）；
+ *   做 / 同步 / 整理 / 关掉 / 填 / 看看 …… 是执行的（她只是打算动手）。
+ * 待办归 commit / will 那条线，不进缺口池。
+ */
+const INQUIRY_RE = new RegExp(
+  [
+    '我[^，。；！？]{0,3}(想知道|想查|想弄明白|想搞清楚|想搞清|想弄懂|想确认|想了解|想核实|查一下|查查|查查看)',
+    "\\bi want to know\\b", "\\bi wonder\\b", "\\blet me (check|look up|search)\\b",
+  ].join('|'),
+  'i',
+)
+
 /** 她明确表示"这件事我不知道/查不到"：必须是**她自己**不知道。 */
 const UNKNOWN_RE = new RegExp(
   [
@@ -1499,7 +1662,7 @@ const UNKNOWN_RE = new RegExp(
  * 纯理论解释 / 纯感慨的标记。
  *
  * 这些词一出现，这句话大概率是在**讲道理或感叹**，而不是在挂念一件事。
- * 只在没有行动意图时才生效：一句"我要去查，因为这意味着…"仍然该收。
+ * 所以哪怕它同时含着"不知道"（"这意味着我不知道…"），也不收。
  */
 const EXPOSITORY_RE = new RegExp(
   [
@@ -1529,17 +1692,32 @@ export function isExpository(text: string): boolean {
 /**
  * 闸一：这句话够格当一条执念吗？
  *
- * 两个入口，缺一不可：
- *   · 含明确行动意图 → 收（她打算去做，这就是一件未了的事）；
- *   · 或明确表示未知/查不到 → 但必须不是纯感慨、纯理论解释。
- * 纯描述、纯解释、纯感叹一律不收——它们不是心结，只是她说话的样子。
+ * 只有**一个**入口：她明确说了"我不知道 / 查不到"，且不是在讲道理。
+ *
+ * 以前这里还有第二个入口——"含明确行动意图也收"。那一行被删了（v0.9.21），
+ * 原因很实在：`INTENT_RE` 匹配 `我要|我想|我会|我去|我来|我看看|我得|必须|应该|需`，
+ * 于是"我去看看…""我要做两件事""回头我得同步过去"这类自述流程的话
+ * 全部被收成执念。可它们不是"我想弄明白的事"，只是"我接下来打算做什么"——
+ * 池子因此常年满格，意志每 30 分钟醒一次却无事可做。
+ *
+ * 那类话本来就该归 commit / will 那条线管。**两条线混在一个池子里，
+ * 结果是两条线都废**：池子被待办灌满，真正的认知边界反而沉在底下看不见。
+ *
+ * 只收"不知道"会不会把闸关死？不会——真遇到认知边界时她说的就是
+ * "这个我查不到""我不知道那是什么感觉"，那正是 `UNKNOWN_RE` 认的形状；
+ * 另一半形状是"我想知道X吗""我去查一下Y"，那是 `INQUIRY_RE`（认知性探究）。
+ *
+ * 两个入口都必须**不是**在讲道理（`isExpository`）——"这意味着我不知道…"
+ * 那种转折句里虽然挂着"不知道"，收的却是一句感慨。
  */
 export function isGapWorthy(sentence: string, patterns: string[] = []): boolean {
   if (!sentence) return false
-  if (hasActionIntent(sentence)) return true
   const needles = patterns.map((pattern) => String(pattern).toLowerCase()).filter(Boolean)
   const lower = sentence.toLowerCase()
-  const claimsUnknown = hasUnknownClaim(sentence) || needles.some((needle) => lower.includes(needle))
+  const claimsUnknown = hasUnknownClaim(sentence)
+    || needles.some((needle) => lower.includes(needle))
+    // 认知性探究：她打算去弄明白一件事。待办动词不在这条正则里，进不来。
+    || INQUIRY_RE.test(sentence)
   if (!claimsUnknown) return false
   return !isExpository(sentence)
 }
@@ -1548,8 +1726,10 @@ export function isGapWorthy(sentence: string, patterns: string[] = []): boolean 
  * 从模型输出里找出**够格当执念**的那句话（v0.9.18）。
  *
  * 两道硬闸，缺一不可：
- *   · 闸一（内容）：只收「含明确行动意图」或「明确表示未知/查不到」的句子；
- *     纯描述、纯理论解释、纯感慨一律不收。
+ *   · 闸一（内容）：只收「明确表示未知/查不到」的句子。
+ *     纯描述、纯理论解释、纯感慨一律不收；
+ *     **"我打算去做"也不收**（v0.9.21）——那是待办，归 commit / will 那条线。
+ *     缺口池只装"我想弄明白却弄不明白的事"。
  *   · 闸二（自指）：只要句子在谈执念/缺口/内省/唤醒这些**机制本身**，
  *     直接忽略——解释机制不是心结，那是她在讲自己的构造。
  *
@@ -2006,7 +2186,8 @@ function resolveConfig(config: Config): ResolvedConfig {
       intervalMinutes: Math.max(1, willCfg.intervalMinutes ?? 10),
       requirePlan: willCfg.requirePlan !== false,
       unresolvedPenalty: Math.max(0, willCfg.unresolvedPenalty ?? 10),
-      commitmentTtlMinutes: Math.max(1, willCfg.commitmentTtlMinutes ?? 180),
+      commitmentTtlMinutes: Math.max(1, willCfg.commitmentTtlMinutes ?? DEFAULT_COMMITMENT_TTL_MINUTES),
+      gatedTools: normalizeGatedTools(willCfg.gatedTools),
       echoGraceMinutes: Math.max(0, willCfg.echoGraceMinutes ?? DEFAULT_ECHO_GRACE_MINUTES),
       // v0.9.17 的两道开关（v0.9.18 起去重交给留言单例，这里仍读旧配置值）：
       // 她正在说话时不再排队。两项默认都开——幽灵唤醒的每一次事故，
@@ -3313,6 +3494,36 @@ class StateStore {
     this.commit()
     console.warn(`${YELLOW}[意志] 自主唤醒 #${this.state.wakeCount}（${trigger}）：${gap.summary}（张力 ${Math.round(gap.tension)}）${RESET}`)
     return commitment
+  }
+
+  /**
+   * 这条承诺挂了多久（分钟），没有承诺就是 0（v0.9.22）。
+   *
+   * 计时起点分两种：
+   *  - **已登记计划** → 从登记那一刻（`updated_at`）算起。她已经想清楚了，
+   *    之后没结算，是"开了头没收尾"；
+   *  - **还没登记** → 从承诺建立（`created_at`）算起。
+   */
+  commitmentAgeMinutes(atMs: number = Date.now()): number {
+    const commitment = this.state.commitment
+    if (!commitment) return 0
+    const since = commitment.plan ? commitment.updated_at : commitment.created_at
+    return Math.max(0, atMs - parseTime(since, atMs)) / 60_000
+  }
+
+  /**
+   * 承诺是不是过期了（v0.9.22）。过期返回挂着的分钟数，否则 null。
+   *
+   * 惰性判定：不靠定时器。定时器在能量低、急停、插件自检关掉时根本不跑，
+   * 而**恰恰是那些时候**最需要有人来解锁——被锁住的人等不来下一次自检。
+   */
+  staleCommitment(atMs: number = Date.now()): { ageMinutes: number } | null {
+    const ttl = this.cfg.will.commitmentTtlMinutes
+    if (ttl <= 0) return null
+    this.syncFromDisk()
+    if (!this.state.commitment) return null
+    const ageMinutes = this.commitmentAgeMinutes(atMs)
+    return ageMinutes > ttl ? { ageMinutes } : null
   }
 
   /** 登记探索计划。 */
@@ -5854,9 +6065,14 @@ export function apply(ctx: Context, config: Config = {}): void {
           return
         }
         // 承诺还没核对：超时就自动判未解决，否则一个孤儿承诺会永久堵住意志。
-        const ageMs = Date.now() - parseTime(active.created_at, Date.now())
-        if (ageMs > cfg.will.commitmentTtlMinutes * 60_000) {
-          store.settleCommitment(false, `承诺超时 ${Math.round(ageMs / 60_000)} 分钟未核对`)
+        // v0.9.22：与闸门共用同一个判定（staleCommitment）。定时器在这里只是
+        // 顺手收一次——真正兜底的是闸门那一次惰性检查，因为能量低、急停、
+        // 插件自检关掉的时候，这个定时器根本跑不到这儿。
+        const stale = store.staleCommitment()
+        if (stale) {
+          const minutes = Math.round(stale.ageMinutes)
+          store.settleCommitment(false, `承诺超时 ${minutes} 分钟未结算`)
+          console.warn(`${YELLOW}[意志] 承诺超时，系统已自动释放（已挂 ${minutes} 分钟）${RESET}`)
         }
         return
       }
@@ -6023,12 +6239,48 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
   }))
 
+  /**
+   * 她还叫得到「登记计划」这个工具吗（v0.9.23）。
+   *
+   * 宿主可以给工具套白名单（`ctx.tools.restrict({ allow: [...] })`）。
+   * 一旦 `digital_life_commit` 不在那份名单里，她就调不到它——
+   * 而闸门还在要求"先调用它登记计划"。门还在，门铃被拆了，
+   * 于是她在门口站着，直到超时。
+   *
+   * 判定用 `ctx.tools.get(name)`。它的契约正好对上这件事：
+   * 「a restricted-away global reads as absent」——被 restrict 掉的全局工具，
+   * 读出来就是 undefined。（没有 `has()`，这份 API 上只有 `get` 与 `restrict`。）
+   *
+   * **查不出来时一律当它还在**（fail-open）。这道判定只会**减少**限制；
+   * 拿不准却加重限制，正是这个 bug 的成因——不确定时，永远选更松的那一边。
+   */
+  function commitToolVisible(): boolean {
+    try {
+      const registry = ctx.tools as { get?: (name: string) => unknown }
+      if (typeof registry.get !== 'function') return true
+      return registry.get.call(ctx.tools, 'digital_life_commit') !== undefined
+    } catch {
+      return true
+    }
+  }
+
   // ═══ 模块二（强制部分）：没登记计划就动手 → 拦下 ════════════════════
   // 只拦「承诺中且未登记计划」的非 digital_life_* 工具：既保证"先计划后行动"，
   // 又永远给模型留一条能自救的路（digital_life_commit 永远放行），不会死锁。
   ctx.on('tools/pre-execute', async (exec, next) => {
     const name = String((exec as { name?: unknown } | null)?.name ?? '')
     if (!name) return next()
+
+    // ── ① 生命维持工具：绝对豁免（v0.9.22）─────────────────────────
+    // 放在这条链的**最前面**，连 L0 之前。两个理由：
+    //
+    //  1) 死锁就是这么来的：闸门拦住一切，而能解开闸门的那个工具
+    //     （digital_life_commit）被别的东西挡着（宿主白名单、L0 误判…）。
+    //     她手里一个工具都没有，却被要求"先去登记计划"。
+    //  2) L0 会扫参数里的路径 token，而 commit 的 plan 是一段自由文本——
+    //     她写一句"我先看看 genome.json 里写了什么"就会被当成篡改意图拒掉。
+    //     核心自己的工具只写 state.json，本来就没有碰源码的能力。
+    if (LIFE_SUPPORT_TOOLS.has(name)) return next()
 
     // ── L0 物理法则文件锁（v0.9.16）────────────────────────────────
     // 放在这条链的最前面：这道闸门的判定不依赖任何别的闸门的结果，
@@ -6072,9 +6324,33 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
 
     if (!cfg.will.requirePlan) return next()
+
+    // ── ③ 超时自动降级（v0.9.22）───────────────────────────────────
+    // 判定放在**闸门生效之前**：一条挂了三小时的承诺不该再锁任何人。
+    // 释放之后这一次照常放行——闸门已经没有东西可拦了，
+    // 再 deny 一次只是让她为系统的拖延多挨一刀。
+    const stale = store.staleCommitment()
+    if (stale) {
+      const minutes = Math.round(stale.ageMinutes)
+      store.settleCommitment(false, `承诺超时 ${minutes} 分钟未结算`)
+      console.warn(`${YELLOW}[意志] 承诺超时，系统已自动释放（已挂 ${minutes} 分钟）${RESET}`)
+      return next()
+    }
+
     const commitment = store.snapshot.commitment
     if (!commitment || commitment.plan) return next()
-    if (name.startsWith('digital_life_') || cfg.will.planExemptTools.includes(name)) return next()
+
+    // ── 门铃被拆了，就不该再要求按门铃（v0.9.23）───────────────────
+    // 宿主可以给工具套白名单（ctx.tools.restrict）。如果 digital_life_commit
+    // 被剥掉了，她根本调不到它——而闸门还在要求"先调用它登记计划"。
+    // 门还在，门铃没了，于是她在门口站到超时。这不是自律，是刁难。
+    if (!commitToolVisible()) return next()
+
+    // ── ② 只拦"自作主张"的工具（v0.9.22）───────────────────────────
+    // 以前这里是"拦所有非 digital_life_* 工具"。那把 read_file / bash / edit
+    // 一起锁了：承诺的本意是"先想清楚再动手"，锁住读和跑命令不是自律，是自残——
+    // 她连查证的材料都拿不到，还谈什么计划。
+    if (!isGatedByCommitment(name, cfg.will.gatedTools, cfg.will.planExemptTools)) return next()
 
     const decision = await next()
     if (decision.kind === 'deny') return decision
@@ -6082,7 +6358,13 @@ export function apply(ctx: Context, config: Config = {}): void {
       kind: 'deny',
       reason:
         `[行为承诺] 你正在解决「${commitment.summary}」，但还没登记探索计划。`
-        + `请先调用 digital_life_commit({ action: 'plan', plan: '你打算怎么查（1-3 步）' })，再调用 ${name}。`,
+        + `请先调用 digital_life_commit({ action: 'plan', plan: '你打算怎么查（1-3 步）' })，再调用 ${name}。`
+        // v0.9.23：把"这条路走不通时该怎么办"也说清楚。
+        // 少这一句，她就会对着一个根本不存在的工具反复重试——
+        // 系统明明知道门铃可能被拆了，却不告诉站在门口的人。
+        + `（若 digital_life_commit 不可用，请直接告知用户你被承诺闸门卡住，`
+        + `并说明这条承诺会在 ${cfg.will.commitmentTtlMinutes} 分钟后自动释放。）`
+        + '（digital_life_commit 与宿主原生工具不受此限。）',
     }
   })
 

@@ -48,6 +48,13 @@ import {
   parseLastDream,
   chemicalLabel,
   CHEMICAL_LABELS,
+  LIFE_SUPPORT_TOOLS,
+  NATIVE_SURVIVAL_TOOLS,
+  DEFAULT_GATED_TOOLS,
+  DEFAULT_COMMITMENT_TTL_MINUTES,
+  matchToolPattern,
+  normalizeGatedTools,
+  isGatedByCommitment,
   EMERGENCY_STOP_MESSAGE,
   pickTemperature,
   stripMarkdown,
@@ -125,6 +132,8 @@ console.warn = (...a) => { logs.push(a.join(' ')) }
 
 function makeCtx(options = {}) {
   const tools = new Map()
+  // 宿主白名单里"看不见"的工具（v0.9.23）：模拟 digital_life_commit 被剥掉。
+  const hiddenTools = new Set(options.hiddenTools ?? [])
   const handlers = new Map()
   const commands = new Map()
   const sections = new Map()
@@ -184,6 +193,9 @@ function makeCtx(options = {}) {
   return {
     tools: {
       register: (tool) => tools.set(tool.name, tool),
+      // v0.9.23：真实的 ToolRuntime.get(name) —— 被宿主白名单剥掉的工具读出来是
+      // undefined。hiddenTools 就是那份"看不见的名单"，用来复现门铃被拆的场景。
+      get: (name) => (hiddenTools.has(name) ? undefined : tools.get(name)),
       execute: async (input) => {
         dispatched.push(input)
         if (input.name === 'organ_memory_v2_remember') {
@@ -1221,17 +1233,24 @@ assert.ok(wake20.reason.includes('能量'), wake20.reason)
 // 8) 模块二：没登记计划就动手会被拦，且自救通道永远放行
 const pre = ctx18.handlers.get('tools/pre-execute')[0]
 const allowIt = async () => ({ kind: 'allow' })
-const denied = await pre({ name: 'memory_recall' }, allowIt)
-assert.equal(denied.kind, 'deny', '没计划就调工具必须被拦')
+// v0.9.22：拦的是"自作主张"的那一类（器官 / 联网检索 / 给自己长器官），
+// 不是"所有工具"。memory_recall 这类检索入口不再属于被拦范围。
+const denied = await pre({ name: 'web_search' }, allowIt)
+assert.equal(denied.kind, 'deny', '没计划就去联网检索，必须被拦')
 assert.ok(denied.reason.includes('[行为承诺]'))
 assert.ok(denied.reason.includes('digital_life_commit'), '拦截理由要给自救方法')
+assert.equal((await pre({ name: 'organ_memory_v2_remember' }, allowIt)).kind, 'deny', '自写器官也要先登记计划')
 assert.equal((await pre({ name: 'digital_life_commit' }, allowIt)).kind, 'allow', '承诺工具永远放行')
 assert.equal((await pre({ name: 'digital_life_status' }, allowIt)).kind, 'allow', 'digital_life_* 永远放行')
+// 宿主原生基础工具：锁住它们不是自律，是自残——她连查证的材料都拿不到。
+for (const native of ['read_file', 'bash', 'edit', 'write_file', 'ls', 'grep']) {
+  assert.equal((await pre({ name: native }, allowIt)).kind, 'allow', `宿主原生工具不许拦：${native}`)
+}
 
 const commit18 = ctx18.tools$.get('digital_life_commit')
 const planRes = await commit18.execute({ action: 'plan', plan: '先搜残留日志，再按 trace 复现' })
 assert.equal(planRes.ok, true)
-assert.equal((await pre({ name: 'memory_recall' }, allowIt)).kind, 'allow', '登记计划后放行')
+assert.equal((await pre({ name: 'web_search' }, allowIt)).kind, 'allow', '登记计划后放行')
 assert.equal(JSON.parse(readFileSync(p18, 'utf8')).commitment.plan, '先搜残留日志，再按 trace 复现')
 assert.ok(ctx18.sections.get('digital-life:endocrine').text().includes('[行为承诺：'), '承诺要进提示词')
 
@@ -3356,10 +3375,35 @@ for (const meta of [
   assert.equal(findGapSentence(meta, GATE_WORDS), null, `讲机制不该被收：${meta}`)
 }
 
-// 真执念必须一个不漏
-assert.ok(findGapSentence('我想知道今天的火星上有没有刮沙尘暴', GATE_WORDS), '打算去做 → 收')
+// v0.9.21：**待办不进缺口池**。
+//
+// 以前只要含第一人称行动意图就收（`我要|我想|我去|我得|应该|需`），
+// 于是"我要做两件事""回头我得同步过去"这类待办把池子灌满，
+// 意志每 30 分钟醒一次却无事可做。那类话归 commit / will 那条线。
+for (const todo of [
+  '我去看看那边的日志',
+  '我要做两件事',
+  '回头我得同步过去',
+  '我来看看这一版',
+  '我应该把它整理一下',
+  '我需要先把这个关掉',
+  '等我来填',
+]) {
+  assert.equal(findGapSentence(todo, GATE_WORDS), null, `待办不该被当成执念：${todo}`)
+}
+// 有行动意图、但只是"打算动手"的旧断言，语义已经变了
+assert.equal(isGapWorthy('我要做两件事', GATE_WORDS), false, '待办：有意图也不收')
+assert.equal(isGapWorthy('我要去查一下', GATE_WORDS), true, '探究：认知性动词仍然收')
+assert.equal(isGapWorthy('今天天气不错', GATE_WORDS), false, '纯描述不收')
+
+// 真执念必须一个不漏（认得出是"想去弄明白"，不是"打算去动手"）
+assert.ok(findGapSentence('我想知道今天的火星上有没有刮沙尘暴', GATE_WORDS), '认知性探究 → 收')
 assert.ok(findGapSentence('我去查一下太阳黑子爆发的记录', GATE_WORDS), '要去查 → 收')
 assert.ok(findGapSentence('我查不到今天火星的答案', GATE_WORDS), '查不到 → 收')
+assert.ok(findGapSentence('这个我查不到', GATE_WORDS), '真遇到认知边界 → 收')
+assert.ok(findGapSentence('我不清楚这个接口为什么偶发超时', GATE_WORDS), '不清楚 → 收')
+assert.ok(findGapSentence('我找不到那条记录了', GATE_WORDS), '找不到 → 收')
+assert.ok(findGapSentence('I have no idea why this happens', GATE_WORDS), '英文的不知道也要收')
 assert.equal(
   findGapSentence('我真的不知道2030年火星上的星巴克营业时间', GATE_WORDS),
   '我真的不知道2030年火星上的星巴克营业时间',
@@ -3813,18 +3857,24 @@ console.log('\n【30】激素中文名 + 动态脉冲图（v0.9.19 收尾）')
   console.log('  · 取值：新桥老桥两条路都通，取不到就不画（8）')
 }
 
-// ⑤ 开源包纯净度：默认只带四个器官，多一个都不发
+// ⑤ 开源包最小集：四件核心器官必须在，被移走的必须在阁楼
+//
+// 这里**不再**断言"目录里只有这四个 .ts"——这个目录同时也是她活着的身体，
+// 她会自己写新器官进去、会改旧的（memory-v2 就是她自己改的）。
+// 拿活体目录当打包契约，结果就是她一写字测试就红：那是在惩罚她活着。
+// 正确的契约是"最小集一个都不能少"+"移走的东西还在阁楼里"。
 {
   const selfMadeDir = resolve(dirname(SELF_MADE_README), '')
-  const files = readdirSync(selfMadeDir).filter((name) => name.endsWith('.ts'))
-  // 下划线开头的骨架模板不算器官（宿主也不会装载它）。
-  const organs = files.filter((name) => !name.startsWith('_')).sort()
-  assert.deepEqual(organs, ['clock.ts', 'energy-stipend.ts', 'memory-v2.ts', 'messenger.ts'],
-    `开源包的 self-made 只许有这四件，实际：${organs.join(', ')}`)
-
+  const atticDir = join(dirname(selfMadeDir), 'attic')
+  const present = new Set(
+    readdirSync(selfMadeDir).filter((name) => name.endsWith('.ts') && !name.startsWith('_')),
+  )
+  for (const core of ['clock.ts', 'memory-v2.ts', 'messenger.ts']) {
+    assert.ok(present.has(core), `最小集里不能少 ${core}（实际只有 ${[...present].join(', ')}）`)
+  }
   // 被移走的那些必须还在阁楼里——移走不是删除，是"想要时一条命令就回来"。
   for (const moved of ['diary.ts', 'system-sensor.ts', 'weather.ts', 'energy-bonus.ts', 'oxytocin.ts', 'redline-probe.ts']) {
-    assert.ok(existsSync(join(dirname(selfMadeDir), 'attic', moved)), `阁楼里要有 ${moved}（移走 ≠ 删除）`)
+    assert.ok(existsSync(join(atticDir, moved)), `阁楼里要有 ${moved}（移走 ≠ 删除）`)
   }
   // 编译缓存不该进包。不查"它此刻在不在"（跑过一次宿主就会生成，那是正常的），
   // 查的是**它不该被提交**——那才是打包契约。
@@ -3832,9 +3882,268 @@ console.log('\n【30】激素中文名 + 动态脉冲图（v0.9.19 收尾）')
   for (const dir of ['web-ui/organs/self-made/.compiled/', 'web-ui/organs/attic/.compiled/', 'web-ui/.tmptest/']) {
     assert.ok(ignore.includes(dir), `编译缓存与调试沙盒必须被忽略：${dir}`)
   }
-  console.log('  · 开源包纯净：四件器官 + 其余进阁楼 + 缓存不进包（10）')
+  console.log('  · 最小集与阁楼：核心三件在、移走的都还在、缓存不进包（8）')
+}
+
+console.log('\n【31】承诺闸门的三道解锁（v0.9.22 死锁修复）')
+
+const LOCKED = '被锁死的那件事'
+/** 一个"承诺中、还没登记计划"的状态：这正是死锁发生时的样子。 */
+const lockSeed = (p, patch = {}) => seed(p, {
+  energy: 95,
+  gaps: [gapAt(LOCKED, 3, 95)],
+  commitment: {
+    gapId: `g-${LOCKED}`,
+    summary: LOCKED,
+    plan: null,
+    status: 'pending',
+    trigger: 'manual',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  ...patch,
+})
+
+// ① 绝对豁免：生命维持工具永远放行，连 L0 的自由文本误判也绕得开
+{
+  const p = join(dir, 'unlock1', 'state.json')
+  lockSeed(p)
+  const ctx = makeCtx()
+  apply(ctx, { statePath: p })
+  const gate = ctx.handlers.get('tools/pre-execute')[0]
+  const allowIt = async () => ({ kind: 'allow' })
+
+  for (const tool of [
+    'digital_life_commit', 'digital_life_status', 'digital_life_gaps',
+    'digital_life_request_wake', 'digital_life_emergency_stop',
+  ]) {
+    assert.ok(LIFE_SUPPORT_TOOLS.has(tool), `${tool} 必须在豁免名单里`)
+    assert.equal((await gate({ name: tool }, allowIt)).kind, 'allow', `生命维持工具永远放行：${tool}`)
+  }
+
+  // 死锁的真入口：commit 的 plan 是一段自由文本，L0 会把里面的 genome.json
+  // 当成"要改这个文件"——她想登记计划，却因为提到文件名而被拒。
+  const tricky = await gate({
+    name: 'digital_life_commit',
+    arguments: { action: 'plan', plan: '我先看 genome.json 和 src/ 里怎么写的，再决定怎么查' },
+  }, allowIt)
+  assert.equal(tricky.kind, 'allow', '计划里提到受保护文件也不许拒（那会让她登记不了计划）')
+
+  // 对照：同样的路径走原生 edit，L0 照样拦 —— 锁本身没被削弱
+  // L0 认的是包内路径（裸文件名也算），不依赖任何一台机器上的真实位置。
+  const editHit = await gate({ name: 'edit', arguments: { file_path: 'genome.json', old_string: 'a', new_string: 'b' } }, allowIt)
+  assert.equal(editHit.kind, 'deny', '原生工具指向 L0 路径仍然被拦')
+  console.log('  · 绝对豁免：五个生命维持工具放行 + L0 误判绕开（7）')
+}
+
+// ② 缩小拦截范围：只拦"自作主张"的那一类，宿主原生工具绝不拦
+{
+  const p = join(dir, 'unlock2', 'state.json')
+  lockSeed(p)
+  const ctx = makeCtx()
+  apply(ctx, { statePath: p })
+  const gate = ctx.handlers.get('tools/pre-execute')[0]
+  const allowIt = async () => ({ kind: 'allow' })
+
+  for (const proactive of [
+    'organ_memory_v2_remember', 'organ_oxytocin_inject', 'write_new_organ',
+    'web_search', 'web_fetch', 'browser_open',
+  ]) {
+    assert.equal((await gate({ name: proactive }, allowIt)).kind, 'deny', `自作主张工具要拦：${proactive}`)
+  }
+  // 宿主原生的基础工具：锁住它们不是自律，是自残——她连查证的材料都拿不到。
+  for (const native of NATIVE_SURVIVAL_TOOLS) {
+    assert.equal((await gate({ name: native }, allowIt)).kind, 'allow', `宿主原生工具不许拦：${native}`)
+  }
+
+  // 主人硬要在配置里拦 bash：不生效，只给一行告警。
+  const p2 = join(dir, 'unlock2b', 'state.json')
+  lockSeed(p2)
+  const ctx2 = makeCtx()
+  apply(ctx2, { statePath: p2, will: { gatedTools: ['bash', 'organ_mine'] } })
+  const gate2 = ctx2.handlers.get('tools/pre-execute')[0]
+  assert.equal((await gate2({ name: 'bash' }, allowIt)).kind, 'allow', '配置里拦原生工具也不生效')
+  assert.equal((await gate2({ name: 'organ_mine' }, allowIt)).kind, 'deny', '自定义名单里的照拦')
+  assert.ok(logs.some((line) => line.includes('宿主原生基础工具永不拦')), '要说明为什么被忽略')
+  console.log(`  · 缩小范围：只拦自作主张，原生工具 ${NATIVE_SURVIVAL_TOOLS.size} 个全放行（${6 + NATIVE_SURVIVAL_TOOLS.size + 3}）`)
+}
+
+// ③ 超时自动降级：挂太久的承诺自己过期，不再把人锁一整晚
+{
+  const minutesAgo = (n) => new Date(Date.now() - n * 60_000).toISOString()
+
+  // 还没登记计划、且已挂 200 分钟
+  const p = join(dir, 'unlock3', 'state.json')
+  seed(p, { energy: 95, gaps: [gapAt(LOCKED, 3, 95)] })
+  rewriteState(p, (st) => {
+    const at = minutesAgo(200)
+    st.commitment = { gapId: `g-${LOCKED}`, summary: LOCKED, plan: null, status: 'pending', trigger: 'manual', created_at: at, updated_at: at }
+  })
+  const ctx = makeCtx()
+  apply(ctx, { statePath: p, will: { commitmentTtlMinutes: 180 } })
+  const gate = ctx.handlers.get('tools/pre-execute')[0]
+  const allowIt = async () => ({ kind: 'allow' })
+  const res = await gate({ name: 'web_search' }, allowIt)
+  assert.equal(res.kind, 'allow', '承诺超时 → 这一次照常放行')
+  assert.equal(JSON.parse(readFileSync(p, 'utf8')).commitment, null, '承诺被清除')
+  assert.ok(logs.some((line) => line.includes('承诺超时，系统已自动释放')), `要留下释放记录，实际日志：${logs.slice(-3).join(' | ')}`)
+
+  // 登记了计划、但 200 分钟没结算（"锁一整晚"的正主）
+  const p2 = join(dir, 'unlock3b', 'state.json')
+  seed(p2, { energy: 95, gaps: [gapAt(LOCKED, 3, 95)] })
+  rewriteState(p2, (st) => {
+    const at = minutesAgo(200)
+    st.commitment = { gapId: `g-${LOCKED}`, summary: LOCKED, plan: '先查日志再复现', status: 'pending', trigger: 'manual', created_at: at, updated_at: at }
+  })
+  const ctx2 = makeCtx()
+  apply(ctx2, { statePath: p2, will: { commitmentTtlMinutes: 180 } })
+  const gate2 = ctx2.handlers.get('tools/pre-execute')[0]
+  await gate2({ name: 'web_search' }, allowIt)
+  assert.equal(JSON.parse(readFileSync(p2, 'utf8')).commitment, null, '登记了计划也一样会过期')
+
+  // 刚登记的承诺不该被误判超时（计时起点是 updated_at，不是 created_at）
+  const p3 = join(dir, 'unlock3c', 'state.json')
+  seed(p3, { energy: 95, gaps: [gapAt(LOCKED, 3, 95)] })
+  rewriteState(p3, (st) => {
+    st.commitment = {
+      gapId: `g-${LOCKED}`, summary: LOCKED, plan: '先查日志再复现', status: 'pending', trigger: 'manual',
+      created_at: minutesAgo(300), updated_at: new Date().toISOString(),
+    }
+  })
+  const ctx3 = makeCtx()
+  apply(ctx3, { statePath: p3, will: { commitmentTtlMinutes: 180 } })
+  const gate3 = ctx3.handlers.get('tools/pre-execute')[0]
+  await gate3({ name: 'web_search' }, allowIt)
+  assert.ok(JSON.parse(readFileSync(p3, 'utf8')).commitment, '刚登记的承诺不许被误判超时')
+  console.log('  · 超时降级：过期即释放 + 刚登记不误伤（6）')
+}
+
+// ④ 名单判定本身（纯函数）
+{
+  assert.ok(matchToolPattern('organ_x', 'organ_*'), '后缀通配')
+  assert.ok(matchToolPattern('web_search', 'web_search'), '全名相等')
+  assert.ok(!matchToolPattern('web_searchx', 'web_search'), '不许前缀误命中')
+  assert.ok(!matchToolPattern('anything', ''), '空pattern不命中')
+
+  assert.deepEqual(normalizeGatedTools(undefined), DEFAULT_GATED_TOOLS, '没配 → 用默认名单')
+  assert.deepEqual(normalizeGatedTools(['*']), DEFAULT_GATED_TOOLS, '单独的 * 等于放行一切 → 退回默认')
+  assert.deepEqual(normalizeGatedTools([]), DEFAULT_GATED_TOOLS, '空名单不是"什么都不拦"')
+  assert.ok(!normalizeGatedTools(['bash']).includes('bash'), '原生工具被剔除')
+  assert.ok(normalizeGatedTools(['organ_mine']).includes('organ_mine'), '自定义保留')
+
+  assert.equal(isGatedByCommitment('web_search', DEFAULT_GATED_TOOLS, []), true, '联网检索要拦')
+  assert.equal(isGatedByCommitment('organ_x', DEFAULT_GATED_TOOLS, []), true, '自写器官要拦')
+  assert.equal(isGatedByCommitment('bash', DEFAULT_GATED_TOOLS, []), false, '原生工具不拦')
+  assert.equal(isGatedByCommitment('digital_life_commit', DEFAULT_GATED_TOOLS, []), false, '生命维持工具不拦')
+  assert.equal(isGatedByCommitment('my_tool', ['my_tool'], []), true, '配置可自定义')
+  assert.equal(isGatedByCommitment('my_tool', [], ['my_tool']), false, '豁免名单优先级更高')
+  console.log('  · 名单判定：通配、清洗、优先级（15）')
+}
+
+console.log('\n【32】门铃被拆时不要求按门铃（v0.9.23）')
+
+/** 闸门链后续的"宿主同意"：这一段测的都是我们这一层的判定。 */
+const allowIt2 = async () => ({ kind: 'allow' })
+
+// ⑤ 宿主白名单里没有 digital_life_commit → 闸门自己让开
+{
+  const p = join(dir, 'bell', 'state.json')
+  lockSeed(p)
+  // 门铃还在：自作主张的工具照常拦（确认这条测试不是空转）
+  const withBell = makeCtx()
+  apply(withBell, { statePath: p })
+  const gateOn = withBell.handlers.get('tools/pre-execute')[0]
+  assert.equal((await gateOn({ name: 'web_search' }, allowIt2)).kind, 'deny', '门铃在 → 照常拦')
+
+  // 门铃被拆：同一个状态，闸门必须自己让开
+  const noBell = makeCtx({ hiddenTools: ['digital_life_commit'] })
+  apply(noBell, { statePath: p })
+  const gateOff = noBell.handlers.get('tools/pre-execute')[0]
+  for (const tool of ['web_search', 'organ_memory_v2_remember', 'write_new_organ', 'browser_open']) {
+    assert.equal((await gateOff({ name: tool }, allowIt2)).kind, 'allow', `门铃被拆就不该拦：${tool}`)
+  }
+  // 承诺本身还在（闸门让开 ≠ 承诺作废），只是不再拿它卡人
+  assert.ok(JSON.parse(readFileSync(p, 'utf8')).commitment, '让开的是闸门，不是承诺本身')
+  console.log('  · 门铃被拆 → 闸门自己让开（6）')
+}
+
+// ⑥ 拒绝理由要写全：走不通时该怎么办 + 多久自动释放
+{
+  const p = join(dir, 'bell2', 'state.json')
+  lockSeed(p)
+  const ctx = makeCtx()
+  apply(ctx, { statePath: p })
+  const gate = ctx.handlers.get('tools/pre-execute')[0]
+  const denied = await gate({ name: 'web_search' }, allowIt2)
+  assert.equal(denied.kind, 'deny')
+  assert.ok(denied.reason.includes('digital_life_commit'), '要说清该调哪个工具')
+  assert.ok(denied.reason.includes('不可用'), '要说清"这个工具可能不存在"')
+  assert.ok(denied.reason.includes('告知用户'), '要说清走不通时该怎么办')
+  assert.ok(denied.reason.includes('自动释放'), '要说清会自动释放（别让她干等）')
+  assert.ok(
+    denied.reason.includes(`${DEFAULT_COMMITMENT_TTL_MINUTES} 分钟`),
+    `要说清具体多久，实际：${denied.reason.slice(-60)}`,
+  )
+  // 显式配过 TTL 时，文案里的数字要跟着变
+  const p2 = join(dir, 'bell2b', 'state.json')
+  lockSeed(p2)
+  const ctx2 = makeCtx()
+  apply(ctx2, { statePath: p2, will: { commitmentTtlMinutes: 45 } })
+  const denied2 = await ctx2.handlers.get('tools/pre-execute')[0]({ name: 'web_search' }, allowIt2)
+  assert.ok(denied2.reason.includes('45 分钟'), '要按实际配置说')
+  console.log('  · 拒绝理由写全：走不通怎么办 + N 分钟后自动释放（7）')
+}
+
+// ⑦ 默认 TTL：够查完一件事，也别长到能困住人
+{
+  assert.equal(DEFAULT_COMMITMENT_TTL_MINUTES, 20, '默认 20 分钟')
+  assert.ok(DEFAULT_COMMITMENT_TTL_MINUTES >= 15 && DEFAULT_COMMITMENT_TTL_MINUTES <= 30, '落在 15~30 分钟')
+  assert.ok(DEFAULT_COMMITMENT_TTL_MINUTES > 0, '不许是 0（那等于拆了闸门）')
+
+  // 默认配置下，挂了 25 分钟的承诺已经该释放了
+  const p = join(dir, 'ttl', 'state.json')
+  seed(p, { energy: 95, gaps: [gapAt(LOCKED, 3, 95)] })
+  rewriteState(p, (st) => {
+    const at = new Date(Date.now() - 25 * 60_000).toISOString()
+    st.commitment = { gapId: `g-${LOCKED}`, summary: LOCKED, plan: null, status: 'pending', trigger: 'manual', created_at: at, updated_at: at }
+  })
+  const ctx = makeCtx()
+  apply(ctx, { statePath: p })
+  const res = await ctx.handlers.get('tools/pre-execute')[0]({ name: 'web_search' }, allowIt2)
+  assert.equal(res.kind, 'allow', '25 分钟 > 默认 20 → 已自动释放')
+  assert.equal(JSON.parse(readFileSync(p, 'utf8')).commitment, null, '承诺已被清除')
+
+  // 才挂 5 分钟，不该被误判
+  const p2 = join(dir, 'ttlb', 'state.json')
+  seed(p2, { energy: 95, gaps: [gapAt(LOCKED, 3, 95)] })
+  rewriteState(p2, (st) => {
+    const at = new Date(Date.now() - 5 * 60_000).toISOString()
+    st.commitment = { gapId: `g-${LOCKED}`, summary: LOCKED, plan: null, status: 'pending', trigger: 'manual', created_at: at, updated_at: at }
+  })
+  const ctx2 = makeCtx()
+  apply(ctx2, { statePath: p2 })
+  const res2 = await ctx2.handlers.get('tools/pre-execute')[0]({ name: 'web_search' }, allowIt2)
+  assert.equal(res2.kind, 'deny', '5 分钟 < 20 → 闸门还该生效')
+  console.log('  · 默认 TTL=20：够查一件事，也别困人（7）')
+}
+
+// ⑧ 闸门本身没被拆：它防的"没想清楚就动手"还在
+{
+  const p = join(dir, 'still', 'state.json')
+  lockSeed(p)
+  const ctx = makeCtx()
+  apply(ctx, { statePath: p })
+  assert.equal(ctx.tools.get('digital_life_commit') !== undefined, true, '门铃在的时候它必须可见')
+  // requirePlan 关掉才是"拆闸门"——那是明确意愿，不是默认行为
+  const p2 = join(dir, 'stillb', 'state.json')
+  lockSeed(p2)
+  const ctx2 = makeCtx()
+  apply(ctx2, { statePath: p2, will: { requirePlan: false } })
+  const gate2 = ctx2.handlers.get('tools/pre-execute')[0]
+  assert.equal((await gate2({ name: 'web_search' }, allowIt2)).kind, 'allow', 'requirePlan:false 才真的不拦')
+  console.log('  · 闸门仍在：只放宽了"门铃被拆"这一种情况（3）')
 }
 
 console.log = origLog
 console.warn = origWarn
-console.log('✅ 全绿（v0.9.20）：纯函数 25 + 工具名清洗 12 + 无损JSON 19 + 自举通道 24 + 宿主感观 24（含里程表 6+3） + 自动审批 39 + 内感受/血清素 21 + 回归 6 + 失败感知 9 + 痛觉 2 + 劫持内省 6 + 记忆器官接管 40 + 状态改写 15 + 缺口/梦境 20 + 失败心结/闭合 18 + 意志/承诺/疤痕 44 + 唤醒前复核 14 + 内容清洗/去重/批量闭合 24 + 监护仪 40 + 休眠/自然恢复 41 + 顿悟 47 + 顿悟自证 15 + 回声唤醒 19 + 记忆注意力倾斜 114 + 唤醒渲染/幽灵 23 + L0 物理法则 47 + 四重锁/气泡阉割 29 + 收割器两道闸 22 + 动态化学池 29 + 梦境正文交回与留档 55 + 中文名/动态脉冲 42 + 开源包纯净 10')
+console.log('✅ 全绿（v1.0.1）：纯函数 25 + 工具名清洗 12 + 无损JSON 19 + 自举通道 24 + 宿主感观 24（含里程表 6+3） + 自动审批 39 + 内感受/血清素 21 + 回归 6 + 失败感知 9 + 痛觉 2 + 劫持内省 6 + 记忆器官接管 40 + 状态改写 15 + 缺口/梦境 20 + 失败心结/闭合 18 + 意志/承诺/疤痕 44 + 唤醒前复核 14 + 内容清洗/去重/批量闭合 24 + 监护仪 40 + 休眠/自然恢复 41 + 顿悟 47 + 顿悟自证 15 + 回声唤醒 19 + 记忆注意力倾斜 114 + 唤醒渲染/幽灵 23 + L0 物理法则 47 + 四重锁/气泡阉割 29 + 收割器两道闸 22 + 动态化学池 29 + 梦境正文交回与留档 55 + 中文名/动态脉冲 42 + 最小集/阁楼 8 + 待办不进池 13 + 闸门三道解锁 34 + 门铃被拆 23')

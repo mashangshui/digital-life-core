@@ -10,7 +10,7 @@
 > 
 > ---
 
-# digital-life-core (v0.9.20)
+# digital-life-core (v1.0.1)
 
 DSH（DeepSeek Harness）数字生命内核：**安全底座 + 感知 / 内分泌 / 情绪劫持 / 时间感 / Life-OS 器官宿主**。
 
@@ -21,7 +21,7 @@ DSH（DeepSeek Harness）数字生命内核：**安全底座 + 感知 / 内分�
 npm install          # esbuild-wasm 是可选依赖，装不上也能跑（走 Node 内置擦除）
 npm run build        # 出 lib/
 npm test             # 冒烟：纯函数 / 自举 / 审批 / 顿悟 …（不联网、不调模型）
-npm run test:organs  # 器官宿主：91 组断言
+npm run test:organs  # 器官宿主：101 组断言
 ```
 
 装进 DSH（三选一）：
@@ -32,7 +32,7 @@ dsh plugin add file:///D:/your/path/digital-life-core   # 本地路径
 ```
 
 状态文件落在 `~/.dsh/digital-life-core/state.json`；出厂器官在 `web-ui/organs/self-made/`
-（只有 `clock` 和 `memory-v2`，其余在 `attic/` 里按需搬回）。所有阈值与开关见下方各版本章节。
+（默认四件：`clock` / `memory-v2` / `messenger` / `energy-stipend`，其余在 `attic/` 里按需搬回）。所有阈值与开关见下方各版本章节。
 
 > WebUI（可选）：`cd web-ui && npm install && npm run dev:all`，浏览器开
 > `http://localhost:5173`——体征曲线、器官树、基因面板、内置操作手册都在里面。
@@ -96,6 +96,226 @@ dsh plugin add file:///D:/your/path/digital-life-core   # 本地路径
 | 十六 | **四重锁 · 忙碌拦截** | `agent.status === 'running'` → 丢弃，绝不排队等她讲完 |
 | 十五 | **L0 物理法则文件锁** | 挂在 `tools/pre-execute`：任何工具（含原生 `edit`/`bash`/`write_file`）改 `genome.json`、`src/`、`index.ts` 一律 deny |
 | 十五 | **造物主的钥匙** | `DL_L0=off dsh` 临时解锁；`l0.allowTools` 只放行指定工具；`l0.extra` 额外锁别的路径 |
+
+## v0.9.23：门铃被拆了，就不该要求按门铃
+
+v0.9.22 收窄了拦截范围，"全线锁死"不会再发生（原生工具永远可用）。
+但还留着一座**门还在、门铃被拆了**的门：宿主的工具白名单里没有 `digital_life_commit`
+时，她登记不了计划，`organ_*` / `web_search` 会被一直拦到超时。
+不会死，但要站着等三个小时。
+
+### 一、查清了 `ctx.tools` 的 API：没有 `has`，有 `get`
+
+`@deepseek-ai/dsh-tools` 的 `ToolRuntime` 上只有 `get(name, scope?)` 与
+`restrict(filter)`——**没有 `has` / `list` / `names`**。而 `get` 的契约正好对上：
+
+> Look up a tool as one scope sees it (scoped shadows global;
+> **a restricted-away global reads as absent**)
+
+宿主白名单正是通过 `restrict({ allow: [...] })` 实现的，被剥掉的工具
+`get` 出来就是 `undefined`。所以判定写成：
+
+```ts
+function commitToolVisible(): boolean {
+  const registry = ctx.tools as { get?: (name: string) => unknown }
+  if (typeof registry.get !== 'function') return true
+  return registry.get.call(ctx.tools, 'digital_life_commit') !== undefined
+}
+// 闸门里：if (!commitToolVisible()) return next()
+```
+
+**查不出来时一律当它还在**（fail-open）：这道判定只会**减少**限制，
+拿不准却加重限制，正是这个 bug 的成因。不确定时，永远选更松的那一边。
+
+### 二、默认 TTL：180 → 20 分钟
+
+```ts
+export const DEFAULT_COMMITMENT_TTL_MINUTES = 20
+```
+
+改小默认值不是"放宽闸门"，是"给闸门装个弹簧"。20 分钟足够跑完一次自主觉醒里的
+探索；万一卡住，自愈从三小时缩到二十分钟。
+
+**别设 0**——那等于把闸门拆了。真要拆请设 `requirePlan: false`：那是明确的意愿，
+不是配错。同理，`gatedTools` 配成 `*` 或空数组会被退回默认名单。
+
+### 三、拒绝理由要写全
+
+以前只说"请先调用 `digital_life_commit`"，没说**这个工具可能根本不存在**。
+于是她会对着一个看不见的工具反复重试——系统明明知道门铃可能被拆了，
+却不告诉站在门口的人：
+
+```
+（若 digital_life_commit 不可用，请直接告知用户你被承诺闸门卡住，
+ 并说明这条承诺会在 N 分钟后自动释放。）
+```
+
+`N` 取的是**实际配置值**，不是写死的 20——配了 45 就说 45。
+
+### 闸门本身没被拆
+
+它防的是"没想清楚就动手"，这条还在：`requirePlan: true`（默认）、
+`DEFAULT_GATED_TOOLS` 五类、原生工具硬豁免，全部照旧。
+这次只放宽了**"门铃被拆了还要求按门铃"**这一种情况。
+
+## v0.9.22：承诺闸门的三道解锁（社区报的死锁）
+
+**症状**：行为承诺闸门拦住了**所有**工具，而能解开闸门的 `digital_life_commit`
+因为不在宿主的工具白名单里而调不动 —— 她手里一个工具都没有，
+却被要求"先去登记计划"。全线锁死，只能重启。
+
+这不是"闸门太严"，是**闸门把自己也锁在了里面**。一道只进不出的门，
+第一次用上去就已经错了。
+
+### 一、绝对豁免权：生命维持工具永远放行
+
+```ts
+export const LIFE_SUPPORT_TOOLS = new Set([
+  'digital_life_commit', 'digital_life_status', 'digital_life_gaps',
+  'digital_life_request_wake', 'digital_life_emergency_stop',
+])
+```
+
+放在 `tools/pre-execute` 链的**最前面——连 L0 文件锁之前**。为什么必须这么靠前：
+
+L0 会扫描参数里的路径 token，而 `digital_life_commit` 的 `plan` 是一段**自由文本**。
+她只要写一句"我先看看 `genome.json` 里写了什么，再决定怎么查"，
+L0 就会把它当成"要改这个文件"拒掉。**她想登记计划，却因为提到文件名而被拒**——
+这就是死锁真正的入口，比白名单那一条更隐蔽。
+
+核心自己的工具只写 `state.json`，本来就没有碰源码的能力，所以这层豁免不会削弱 L0：
+同一个 `genome.json` 走原生 `edit`，照样被拦（测试里有这条对照）。
+
+### 二、缩小拦截范围：只拦"自作主张"
+
+```ts
+// 以前
+if (name.startsWith('digital_life_') || planExemptTools.includes(name)) return next()
+// → 拦掉其他一切，包括 read_file / bash / edit
+
+// 现在：没命中名单的一律放行
+export const DEFAULT_GATED_TOOLS = ['organ_*', 'write_new_organ', 'web_search', 'web_fetch', 'browser_*']
+```
+
+- `organ_*`：她自己写的器官，是一次承诺里最该先想清楚的"动手"；
+- `write_new_organ`：给自己长出新器官，不可逆；
+- `web_search` / `web_fetch` / `browser_*`：高耗能、出网、还会把结果带进记忆。
+
+**宿主原生基础工具（`read_file` / `bash` / `edit` / `ls` / `grep` …）硬豁免：
+即便配置里把 `bash` 写进 `gatedTools` 也不生效**（只打一行告警）。
+拿配置把自己锁死，是这个系统能犯的最蠢的错误，不该允许它发生。
+
+锁住读和跑命令不是自律，是自残——她连查证的材料都拿不到，还谈什么计划。
+
+```yaml
+will:
+  requirePlan: true
+  commitmentTtlMinutes: 20       # 承诺多久没结算就自动释放（v0.9.23 起默认 20）
+  gatedTools:                    # 可覆盖，支持 `*` 后缀通配
+    - 'organ_*'
+    - 'write_new_organ'
+    - 'web_search'
+```
+
+`*` 单独出现等于放行 shell 与网络，会被退回默认名单；空名单同理
+（真要关掉闸门请设 `requirePlan: false`，那是明确的意愿，不是配错了）。
+
+### 三、超时自动降级：不结算就自己过期（默认 20 分钟）
+
+判定放在**闸门生效之前**，而且是**惰性的**——不靠定时器：
+
+```ts
+const stale = store.staleCommitment()
+if (stale) {
+  store.settleCommitment(false, `承诺超时 ${minutes} 分钟未结算`)
+  console.warn(`[意志] 承诺超时，系统已自动释放（已挂 ${minutes} 分钟）`)
+  return next()   // 释放之后这一次照常放行
+}
+```
+
+为什么不放在定时器里：定时器在**能量低、急停、插件自检关掉**时根本不跑——
+而恰恰是那些时候最需要有人来解锁。被锁住的人等不来下一次自检。
+
+计时起点分两种，**已登记计划从登记那一刻（`updated_at`）算起**，
+还没登记则从承诺建立算起。前者才是"锁一整晚"的正主：她明明想清楚了，
+开了头没结尾，系统却把那扇门一直关着。
+
+释放之后**这一次照常放行**：闸门已经没有东西可拦了，
+再 deny 一次只是让她为系统的拖延多挨一刀。
+
+### 一句话
+
+> 一道闸门先要保证自己能被打开。
+> 拦住一切、却把钥匙留在门内——那不是自律，那是绑架。
+
+## v0.9.21：待办不进缺口池
+
+**症状**：缺口池常年满格，意志每 30 分钟醒一次却无事可做。
+
+**根因**：`isGapWorthy()` 里有一行短路——
+
+```ts
+if (hasActionIntent(sentence)) return true   // ← 这一行
+```
+
+它让"含第一人称行动意图"的句子**不需要任何未知/疑问**就通过闸门。
+而 `INTENT_RE` 匹配 `我要|我想|我会|我去|我来|我看看|我得|必须|应该|需`，
+于是"我去看看…""我要做两件事""回头我得同步过去"这类自述流程的话全被收成执念。
+
+**它们不是"我想弄明白的事"，只是"我接下来打算做什么"。**
+两条线混在一个池子里，结果是两条线都废：池子被待办灌满，
+真正的认知边界反而沉在底下看不见。
+
+### 改法
+
+那一行删掉。缺口池只装**明确说了不知道/查不到**的句子，
+待办归 `commit` / `will` 那条线。
+
+但删完之后回归发现**两处真损失**：
+
+- `我想知道今天的火星上有没有刮沙尘暴`
+- `我去查一下太阳黑子爆发的记录`
+
+这两句恰好是本项目对"真执念"的定义形状，而且就在她当时的池子里。
+光删那一行会把它们一起关掉——那就不是收紧闸门，是把闸门焊死。
+
+于是从"行动意图"里单独切出一条**认知性探究**：
+
+```ts
+const INQUIRY_RE = /我[^，。；！？]{0,3}(想知道|想查|想弄明白|想搞清楚|想确认|想了解|查一下|…)/
+```
+
+分界不在"要不要去做"，而在**动词是不是认知性的**：
+
+| 动词 | 归类 | 例子 |
+| --- | --- | --- |
+| 知道 / 查 / 弄明白 / 搞清楚 / 确认 / 了解 | 认知性 → **收** | "我想知道火星上有没有沙尘暴" |
+| 做 / 同步 / 整理 / 关掉 / 填 / 看看 | 执行性 → **不收** | "我要做两件事""等我来填" |
+
+### 验收
+
+工单给的七句，改前命中 6/7，改后只剩第 2 条（它确实含"不知道"）：
+
+| # | 句子 | 改前 | 改后 |
+| --- | --- | --- | --- |
+| 1 | 对我来说，网页里的一句话和你发的一句话，长得一模一样 | 命中 | null |
+| 2 | 我不看不知道，一看才发现：固定段落就有四五块 | 命中 | **命中** |
+| 3 | 如果某条记忆的前 80 字不足以让我认出它… | 命中 | null |
+| 4 | 你之后如果觉得能量还是掉得快… | null | null |
+| 5 | 判据：开头几十个字能不能让我认出是哪一条 | 命中 | null |
+| 6 | 边界在哪，我得说清 | 命中 | null |
+| 7 | 30 号的格子已经铺好，那一笔还空着，等我来填 | 命中 | null |
+
+反向回归（别把闸关死）：`这个我查不到` / `我查不到今天的答案` /
+`我不知道那是什么感觉` / `我不清楚这个接口为什么偶发超时` /
+`我找不到那条记录了` / `I have no idea why this happens` —— **一个不漏都还收**。
+
+### 顺带修的测试契约
+
+【30】⑤ 以前断言"self-made 目录里只有那四个 `.ts`"。
+那个目录同时也是**她活着的身体**——她会自己写器官进去、会改旧的。
+拿活体目录当打包契约，结果就是她一写字测试就红：那是在惩罚她活着。
+改成正确的契约：**核心三件一个都不能少 + 移走的都还在阁楼**。
 
 ## v0.9.20：她造的东西，界面也得认（开源前的最后三件事）
 
@@ -2160,7 +2380,7 @@ pickAgent()  →  重新读磁盘缺口池（openGaps 内含 syncFromDisk）  �
 | `true` | 缺口 `status='resolved'`、`tension=0`、承诺清空 |
 | `false` | `relief -= 10` → 张力 +10（"没解决"要付出代价） |
 
-两个兜底：承诺超过 `commitmentTtlMinutes`(180) 未核对 → 自动判未解决并惩罚；
+两个兜底：承诺超过 `commitmentTtlMinutes`(默认 20) 未核对 → 自动判未解决并惩罚；
 缺口被别的路径提前闭合 → 承诺直接收尾，**不**惩罚。
 
 ### 模块三：不可逆疤痕
@@ -2438,7 +2658,7 @@ if (finish.kind === 'error' || finish.kind === 'aborted') {
           intervalMinutes: 10        # 自检间隔
           requirePlan: true          # 强制先登记探索计划
           unresolvedPenalty: 10      # 承诺未兑现的张力惩罚
-          commitmentTtlMinutes: 180  # 承诺多久没核对算未解决
+          commitmentTtlMinutes: 20   # 承诺多久没核对算未解决
           echoGraceMinutes: 10       # v0.9.8：执念被别家闭合后多久内的唤醒算回声（0 = 关掉这道闸门）
           wakePresentation: 'user'   # v0.9.17：'user'（默认）= 一条只写着 `...` 的普通消息
                                      #           'notice' = 以插件生产者身份出现（真实 UI 里同样会被折叠）
@@ -2563,7 +2783,7 @@ npm run verify:live # 真实进程 + 真实文件 + 真实工具调用（不是�
 - 自主唤醒会**真的往你的会话里插一条消息**（`[自主觉醒] …`）。它来自插件，不是你在说话；不想被打断就 `will.enabled: false`。
   v0.9.13 起它不再伪装成用户：默认以 `digital-life` 生产者的**上下文通知**出现（折叠成一行），
   不是三段话的绿色气泡；配 `will.wakePresentation: 'user'` 可回到旧样子。
-- 唤醒后若模型只是闲聊、既不登记计划也不核对，承诺会在 180 分钟后被判未解决（张力 +10）。这是有意的：拖着也算没做。
+- 唤醒后若模型只是闲聊、既不登记计划也不核对，承诺会在 20 分钟后被判未解决（张力 +10）。这是有意的：拖着也算没做。
 - 测试时把 `will.idleMinutes` 调成 `1`、`will.intervalMinutes` 调成 `1`，一分钟内就能看到自己醒来。
 - 自动唤醒比留言唤醒多一道张力复核：期间被缓解到门槛以下就不喊了（留言唤醒本就是绕过门槛用的）。
 - 梦境一次只处理**张力最高的一条**缺口，多缺口要多次入梦才会逐条缓解。

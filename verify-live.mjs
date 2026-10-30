@@ -23,10 +23,12 @@ const check = (name, ok, detail) => {
   else { fail += 1; console.log(`  ❌ ${name}  → ${detail}`) }
 }
 
-function boot(id, { state, genomeFile, watchStateFile = true, dream = '把「今天」从一条待检索的记录，换成一件正在发生的事。', broken = false, ...opts }) {
+function boot(id, { state, genomeFile, watchStateFile = true, dream = '把「今天」从一条待检索的记录，换成一件正在发生的事。', broken = false, hiddenTools = [], ...opts }) {
   /** 假海马体的仓（每个 boot 一份，互不串味）。 */
   const hippocampus = []
   let hippocampusSeq = 0
+  /** 宿主白名单里"看不见"的工具（v0.9.23）。 */
+  const hidden = new Set(hiddenTools)
   const dreamText = dream
   const brokenHippocampus = broken
   const statePath = join(root, `${id}.state.json`)
@@ -102,6 +104,9 @@ function boot(id, { state, genomeFile, watchStateFile = true, dream = '把「今
     inject: [],
     tools: {
       register: (t) => tools.set(t.name, t),
+      // v0.9.23：真实的 ToolRuntime.get(name)。宿主白名单（restrict）剥掉的工具
+      // 读出来就是 undefined —— hiddenTools 就是那份"看不见的名单"。
+      get: (name) => (hidden.has(name) ? undefined : tools.get(name)),
       // 一个**真的会记东西**的假海马体（v0.9.19）。
       // 梦境写入要"写完读回来"才算存住，所以假海马体必须真存、真能读回来；
       // brokenHippocampus 则模拟热重载中的真实形态：回 ok:true，但一行都没落进仓里。
@@ -136,6 +141,8 @@ function boot(id, { state, genomeFile, watchStateFile = true, dream = '把「今
   apply(ctx, { ...opts, statePath, genomeFile, watchStateFile, will: { enabled: true, minTension: 1, idleMinutes: 0 } })
   return {
     tools,
+    /** 宿主视角：被白名单剥掉的工具读出来是 undefined（v0.9.23）。 */
+    toolsGet: (name) => (hidden.has(name) ? undefined : tools.get(name)),
     delivered,
     sections,
     agent,
@@ -633,6 +640,117 @@ const DREAM = '把「今天」从一条待检索的记录，换成一件正在�
   check('真实存档上留档记下落点', saved.lastDream?.savedTo === 'hp-001', String(saved.lastDream?.savedTo))
   // 她当时做过的那些梦没能存进记忆（那时还没人回执），这里是"留档仍救得回来"的证据。
   console.log(`  真实存档：dreamCount=${saved.dreamCount}，留档=${saved.lastDream ? '有' : '无'}`)
+}
+
+console.log('\n══════ ⑨ 死锁：承诺闸门的三道解锁（v0.9.22） ══════')
+
+// 社区报的那次全线死锁：承诺闸门拦住一切，而能解开闸门的 digital_life_commit
+// 被宿主白名单挡在外面 —— 她一个工具都没有，却被要求"先去登记计划"。
+{
+  const minutesAgo = (n) => new Date(Date.now() - n * 60_000).toISOString()
+  const GAP_ID = 'gap-deadlock'
+  const pending = (at) => ({
+    gapId: GAP_ID,
+    summary: '锁死时要解的那一件事',
+    plan: null,
+    status: 'pending',
+    trigger: 'manual',
+    created_at: at,
+    updated_at: at,
+  })
+
+  // ① 绝对豁免：生命维持工具永远放行
+  const h = boot('deadlock1', { state: { gaps: [{ ...gapX, id: GAP_ID }] }, genomeFile: G(1) })
+  h.write({ commitment: pending(new Date().toISOString()) })
+  check('先确认闸门确实生效着（自作主张的工具被拦）', (await h.pre('web_search', {})).kind === 'deny', '闸门没生效，这条测试是空的')
+
+  for (const tool of ['digital_life_commit', 'digital_life_status', 'digital_life_gaps', 'digital_life_request_wake']) {
+    const decision = await h.pre(tool, {})
+    check(`生命维持工具永远放行：${tool}`, decision.kind === 'allow', JSON.stringify(decision))
+  }
+  // 死锁的真入口：commit 的 plan 是自由文本，L0 会把里面的 genome.json 当成篡改意图。
+  const tricky = await h.pre('digital_life_commit', { action: 'plan', plan: '我先看 genome.json 里写了什么再决定' })
+  check('计划里提到受保护文件也不许拒（否则她登记不了计划）', tricky.kind === 'allow', JSON.stringify(tricky))
+
+  // ② 只拦自作主张：宿主原生基础工具绝不拦
+  for (const tool of ['organ_memory_v2_remember', 'write_new_organ', 'web_search']) {
+    const decision = await h.pre(tool, {})
+    check(`自作主张工具仍被拦：${tool}`, decision.kind === 'deny', JSON.stringify(decision))
+  }
+  for (const tool of ['read_file', 'bash', 'edit']) {
+    const decision = await h.pre(tool, {})
+    check(`宿主原生工具不许拦：${tool}`, decision.kind === 'allow', JSON.stringify(decision))
+  }
+
+  // ③ 超时自动降级：挂了 200 分钟的承诺自己过期
+  const h2 = boot('deadlock2', { state: { gaps: [{ ...gapX, id: GAP_ID }] }, genomeFile: G(1) })
+  h2.write({ commitment: pending(minutesAgo(200)) })
+  const freed = await h2.pre('web_search', {})
+  check('承诺超时 → 这一次照常放行', freed.kind === 'allow', JSON.stringify(freed))
+  check('承诺被清除（不再把人锁一整晚）', h2.read().commitment === null, JSON.stringify(h2.read().commitment))
+
+  // 刚登记的承诺不许被误判超时（计时起点是登记那一刻）
+  const h3 = boot('deadlock3', { state: { gaps: [{ ...gapX, id: GAP_ID }] }, genomeFile: G(1) })
+  h3.write({ commitment: pending(new Date().toISOString()) })
+  await h3.pre('web_search', {})
+  check('刚登记的承诺不许被误判超时', h3.read().commitment !== null, '承诺被误清了')
+}
+
+console.log('\n══════ ⑩ 门铃被拆时不要求按门铃（v0.9.23） ══════')
+
+// v0.9.22 收窄了拦截范围，"全线锁死"不会再发生；
+// 剩下的是一座"门还在、门铃被拆了"的门——她要在门口站到超时。
+{
+  const GAP_ID = 'gap-bell'
+  const pending = {
+    gapId: GAP_ID, summary: '门铃被拆时要解的那一件事', plan: null,
+    status: 'pending', trigger: 'manual',
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }
+
+  // 门铃在：自作主张的工具照常拦（先确认这条测试不是空转）
+  const h1 = boot('bell1', { state: { gaps: [{ ...gapX, id: GAP_ID }] }, genomeFile: G(1) })
+  h1.write({ commitment: pending })
+  check('门铃在 → 联网检索照常被拦', (await h1.pre('web_search', {})).kind === 'deny', '闸门没生效')
+
+  // 门铃被拆：宿主白名单里没有 digital_life_commit → 闸门自己让开
+  const h2 = boot('bell2', {
+    state: { gaps: [{ ...gapX, id: GAP_ID }] },
+    genomeFile: G(1),
+    hiddenTools: ['digital_life_commit'],
+  })
+  h2.write({ commitment: pending })
+  check('门铃确实被拆了（宿主视图里读不出来）', h2.toolsGet('digital_life_commit') === undefined, '模拟没生效')
+  check('门铃在的时候读得出来（对照组）', h1.toolsGet('digital_life_commit') !== undefined, '对照组不该是空的')
+  for (const tool of ['web_search', 'web_fetch', 'organ_memory_v2_remember', 'write_new_organ']) {
+    const decision = await h2.pre(tool, {})
+    check(`门铃被拆 → 不再拦：${tool}`, decision.kind === 'allow', JSON.stringify(decision))
+  }
+  check('让开的是闸门，不是承诺本身', h2.read().commitment !== null, '承诺被误清了')
+
+  // 原生工具在两种情况下都可用（v0.9.22 那道底线没动）
+  for (const tool of ['read_file', 'bash', 'edit']) {
+    check(`原生工具在门铃被拆时也照样可用：${tool}`, (await h2.pre(tool, {})).kind === 'allow', '')
+  }
+
+  // 拒绝理由要写全：走不通时该怎么办 + 多久自动释放
+  const denied = await h1.pre('web_search', {})
+  check('拒绝理由要交代 digital_life_commit', String(denied.reason).includes('digital_life_commit'), '')
+  check('拒绝理由要说清"它可能不可用"', String(denied.reason).includes('不可用'), String(denied.reason))
+  check('拒绝理由要告诉她该去告诉用户', String(denied.reason).includes('告知用户'), String(denied.reason))
+  check('拒绝理由要说清多久自动释放', String(denied.reason).includes('自动释放'), String(denied.reason))
+
+  // 默认 TTL：20 分钟（够查完一件事，也别困住人）
+  const h3 = boot('bell3', { state: { gaps: [{ ...gapX, id: GAP_ID }] }, genomeFile: G(1) })
+  h3.write({
+    commitment: {
+      ...pending,
+      created_at: new Date(Date.now() - 25 * 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 25 * 60_000).toISOString(),
+    },
+  })
+  check('默认 TTL 下挂 25 分钟 → 已自动释放', (await h3.pre('web_search', {})).kind === 'allow', '还在拦')
+  check('承诺已被清除', h3.read().commitment === null, JSON.stringify(h3.read().commitment))
 }
 
 console.log(`\n${fail === 0 ? '✅ 真实环境全部通过' : '❌ 有失败'}：${pass} 通过 / ${fail} 失败\n`)

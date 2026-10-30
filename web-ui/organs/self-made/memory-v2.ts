@@ -333,7 +333,11 @@ export default defineOrgan({
 
     const lines = top.map((item) => {
       const tag = item.entry.kind === 'crisis' ? '危机' : item.entry.kind === 'daily' ? '日常' : item.entry.kind === 'decision' ? '决定' : '事实'
-      return '[' + tag + '] ' + String(item.entry.text)
+      const full = String(item.entry.text)
+      // 提示词里只放「索引」，不放正文：开头够我认出是哪条就行。
+      // 每轮都带一段全文，是最容易涨成 token 黑洞的地方——要看细节自己调 recall。
+      const brief = full.length > 80 ? full.slice(0, 80) + '…（要看全文用 recall）' : full
+      return '[' + tag + '] ' + brief
     })
 
     return {
