@@ -23,6 +23,21 @@ web-ui/.tmptest/
 .loadtest/
 *.tsbuildinfo
 
+# ── WebUI 里的私人素材 ──────────────────────────────────────
+# public/ 下放的是本机跑界面时截的参考图（含她那时的真实读数），
+# 且没有任何代码引用它——不进仓库，clone 下来照样能跑。
+web-ui/public/
+
+# ── 她的私人器官（本机专属，不进开源包）─────────────────────
+# self-made/ 既是默认装载目录，也是她长身体的地方。开源包只发四件核心
+# （clock / memory-v2 / messenger / energy-stipend），她后来自己长的这些
+# 只留在本机；可公开的那一版在 attic/ 里，想要一条 cp 就回来。
+web-ui/organs/self-made/diary.ts
+web-ui/organs/self-made/oxytocin.ts
+web-ui/organs/self-made/system-sensor.ts
+web-ui/organs/self-made/weather.ts
+web-ui/organs/self-made/energy-bonus.ts
+
 # ── 编辑器 / 操作系统 ────────────────────────────────────────
 .vscode/
 .idea/
