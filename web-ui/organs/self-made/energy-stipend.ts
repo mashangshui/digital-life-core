@@ -51,7 +51,9 @@ export default defineOrgan({
     kind: 'patch',
     description: '完工反哺：执念真被闭合时，从状态里读出能量、往上补一截再写回；有冷却、有封顶',
     author: '鱼小水',
-    capabilities: ['patch:runtime', 'tools', 'state:read'],
+    // 只声明真在用的能力。以前这里还写着 'tools'，可它一个工具都没注册——
+    // 声明了却不兑现，就是白占一份静态税（宿主会为它预留工具槽位）。
+    capabilities: ['patch:runtime', 'state:read'],
     patches: [
       { target: 'digital_life_*', phase: 'after' },
     ],

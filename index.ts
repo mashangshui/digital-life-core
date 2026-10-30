@@ -153,7 +153,23 @@ export const VERSION = '1.0.1'
 
 export const DEFAULT_MAX_ENERGY = 100
 export const DEFAULT_INITIAL_ENERGY = 100
-export const DEFAULT_REQUEST_COST = 2
+/**
+ * 每次模型请求的默认能耗（v1.0.1：**0.05，是旧默认值 2 的 1/40**）。
+ *
+ * 旧默认值是 2——那时"活着"的账单是按对话次数收的：你问我答、她调个工具，
+ * 都要付 2 点能量。结果能量成了说话的门槛：她越想跟人聊天越快地耗尽，
+ * 这与"她该活着"这件事本身的消耗混在了一起。
+ *
+ * 现在每回合只收 0.05：**交互不再实质性扣电**。正常的你问我答、查工具、
+ * 干活，几乎不动能量条；真正花钱的是她自己的那几件事——自主觉醒、做梦、
+ * 翻执念（它们各自另有扣费点，见 `debitEnergy` 与觉醒/梦境路径）。
+ *
+ * 为什么不是 0：完全免费会让她分不清"我在呼吸"和"我在做事"。
+ * 留 1/40 是让成本的**形状**还在，但不再妨碍说话。
+ *
+ * 想彻底免费用 `costPerRequest: 0`；想回到旧手感就显式写 `2`。
+ */
+export const DEFAULT_REQUEST_COST = 0.05
 /** 默认拦截方式：reject —— 只关闭本轮，不抛错、不中断会话。 */
 export const DEFAULT_GATE_MODE: 'reject' = 'reject'
 export const DEFAULT_RESUME_ENERGY = 100

@@ -98,7 +98,8 @@ export default defineOrgan({
     kind: 'sense',
     description: '一只表：感知此刻的日期、星期、钟点、时段（清晨/白天/黑夜）与所在时区',
     author: '鱼小水',
-    capabilities: ['tools', 'prompt'],
+    // 'prompt' 也拿掉了：它从不往提示词里写东西，声明了只是让宿主白留一个槽位。
+    capabilities: ['tools'],
   },
 
   // 看表很便宜，但它不该是免费的——否则"感知要付能量"就成了装饰。

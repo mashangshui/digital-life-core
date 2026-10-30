@@ -435,11 +435,13 @@ assert.equal(classifyFailure(Object.assign(new Error('aborted'), { name: 'AbortE
 assert.equal(classifyFailure(new Error('unexpected 500')), 'error')
 
 // ═══ B. 新默认值 + 阶段一回归 ═════════════════════════════════════
-assert.equal(DEFAULT_REQUEST_COST, 2, '默认每次请求扣 2 点')
+// v1.0.1：交互免打扰。每回合只收 0.05（旧默认值 2 的 1/40）——
+// 正常的你问我答、调工具几乎不动能量，真正花钱的是自主觉醒 / 做梦 / 翻执念。
+assert.equal(DEFAULT_REQUEST_COST, 0.05, '默认每次请求只扣 0.05（旧默认 2 的 1/40）')
 
 const p1 = join(dir, 'p1', 'state.json')
 let ctx = makeCtx()
-apply(ctx, { statePath: p1 })            // 全默认：cost=2、gateMode=reject
+apply(ctx, { statePath: p1 })            // 全默认：cost=0.05、gateMode=reject
 assert.ok(ctx.tools$.has('digital_life_status') && ctx.tools$.has('digital_life_emergency_stop'))
 
 const gate = () => ctx.handlers.get('agent/pre-step')[0]
@@ -448,10 +450,13 @@ const chat = { turn: 1, step: 1, messages: [{ role: 'user' }] }
 const nextEnter = async () => ({ kind: 'enter', messages: [] })
 
 await stream()({}, () => ['x'])
-assert.equal((await ctx.tools$.get('digital_life_status').execute({})).energy, 98, '默认一次请求扣 2')
+assert.equal((await ctx.tools$.get('digital_life_status').execute({})).energy, 99.95, '默认一次请求只扣 0.05')
 
 // 打到 0：默认拦截模式是 reject（返回决策，不抛错）
-for (let i = 0; i < 49; i += 1) await stream()({}, () => ['x'])
+// v1.0.1 起每回合只收 0.05，真磨到零要两千次调用——没必要。
+// 把能量压到只够这一次，一样能验到"归零之后的那道闸"。
+seed(p1, { energy: 0.05 })
+await stream()({}, () => ['x'])
 assert.equal((await ctx.tools$.get('digital_life_status').execute({})).energy, 0, '能量归零')
 assert.deepEqual(await gate()(chat, nextEnter), { kind: 'reject' }, '默认 gateMode=reject 优雅拒绝')
 assert.deepEqual(await gate()({ messages: [] }, nextEnter), { kind: 'enter', messages: [] }, '工具续跑仍放行')
@@ -1129,7 +1134,9 @@ assert.ok(scarredCalm.startsWith(`[创伤警告：${scarText}]`), `不应激时�
 
 // 3) 濒死留疤：11 → 9 跌线
 const p16 = join(dir, 'p16', 'state.json')
-seed(p16, { energy: 11 })
+// v1.0.1：每回合只收 0.05，从 11 起步跌不破 10 了——从刚好的位置起步，
+// 验的还是同一件事："跌破 10 的那一下必须留疤"。
+seed(p16, { energy: 10 })
 const ctx16 = makeCtx()
 apply(ctx16, { statePath: p16 })
 const quietStream = async function* () { yield { type: 'finish', reason: { kind: 'stop' } } }
@@ -1137,7 +1144,7 @@ await drainWith(ctx16, quietStream)
 let st16 = JSON.parse(readFileSync(p16, 'utf8'))
 assert.equal(st16.scars.length, 1, '跌破 10 必须留疤')
 assert.equal(st16.scars[0], scarText)
-assert.equal(st16.energy, 9)
+assert.ok(st16.energy < 10, `跌破 10 才算濒死，实际 ${st16.energy}`)
 
 // 同一次濒死里继续花能量，不会再留一道
 await drainWith(ctx16, quietStream)
