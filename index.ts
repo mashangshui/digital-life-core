@@ -4963,6 +4963,11 @@ export function apply(ctx: Context, config: Config = {}): void {
           openGaps: { type: 'number' },
           scars: { type: 'number' },
           idleHours: { type: 'number' },
+          // v1.0.1 的漏项：dashboardPayload 会返回这两个字段，但 schema 里没写，
+          // 而 additionalProperties 是 false —— 宿主直接判 "returned invalid output"，
+          // 于是这个工具从来没能成功返回过一次。补上即可，行为不变。
+          restMode: { type: 'string' },
+          naturalCap: { type: 'number' },
         },
         additionalProperties: false,
       },
