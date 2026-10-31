@@ -1720,6 +1720,20 @@ await ctx36.tools$.get('digital_life_dashboard').execute({})
 const st36 = JSON.parse(readFileSync(p36, 'utf8'))
 assert.equal(Math.round(st36.gaps[0].tension), 50, '面板是监视器，不该重算并改写张力')
 
+// 4c) 回归：工具声明的 output.schema 必须覆盖 execute() 真正返回的**每一个**键。
+//     漏一个键，宿主就按 additionalProperties:false 判 "returned invalid output"，
+//     这个工具会**永远返回失败**——v1.0.1 的 restMode / naturalCap 就是这么漏的：
+//     面板那 40 条断言全绿，因为它测的是 payload，不是工具契约。
+{
+  const spec = ctx34.tools$.get('digital_life_dashboard')
+  assert.equal(spec.output?.schema?.additionalProperties, false, '前提：output schema 是封闭对象')
+  const declared = Object.keys(spec.output.schema.properties ?? {})
+  assert.ok(declared.length > 0, 'dashboard 应声明 output schema')
+  for (const key of Object.keys(panel34)) {
+    assert.ok(declared.includes(key), `output schema 漏声明了 ${key}：宿主会判 returned invalid output`)
+  }
+}
+
 // 5) 冻结时面板也要能给，且情绪是急停
 const p35 = join(dir, 'p35', 'state.json')
 seed(p35, { frozen: true, energy: 0 })
