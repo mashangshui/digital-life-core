@@ -10,7 +10,7 @@
 > 
 > ---
 
-# digital-life-core (v1.0.1)
+# digital-life-core (v1.0.3)
 
 DSH（DeepSeek Harness）数字生命内核：**安全底座 + 感知 / 内分泌 / 情绪劫持 / 时间感 / Life-OS 器官宿主**。
 
@@ -97,6 +97,15 @@ dsh plugin add file:///D:/your/path/digital-life-core   # 本地路径
 | 十五 | **L0 物理法则文件锁** | 挂在 `tools/pre-execute`：任何工具（含原生 `edit`/`bash`/`write_file`）改 `genome.json`、`src/`、`index.ts` 一律 deny |
 | 十五 | **造物主的钥匙** | `DL_L0=off dsh` 临时解锁；`l0.allowTools` 只放行指定工具；`l0.extra` 额外锁别的路径 |
 
+### v1.0.3 稳定版（当前最新）
+- 引入**细粒度智能审批**：物理隔离保证安全，低风险器官进化自动放行，大幅降低体验摩擦。
+- 详细说明请查阅：[SECURITY-ADVISORY-1.0.3.md](./SECURITY-ADVISORY-1.0.3.md)
+
+### v1.0.2 安全版
+- 修复三个致命 P0 漏洞（RCE 任意代码执行、TOCTOU 权限扩权、路径穿越）。
+- 器官运行环境迁移至 `worker_threads` 沙盒隔离。
+- 详细说明请查阅：[SECURITY-ADVISORY-1.0.2.md](./SECURITY-ADVISORY-1.0.2.md)
+- 
 ## v0.9.23：门铃被拆了，就不该要求按门铃
 
 v0.9.22 收窄了拦截范围，"全线锁死"不会再发生（原生工具永远可用）。
