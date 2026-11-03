@@ -1,0 +1,11 @@
+# digital-life-core —— bundle patch 层
+#
+# 这是插件被 `dsh plugin add` 装进 profile 后贡献的配置层：
+# 安装器读取 package.json 的 dsh.bundle.patch 指向本文件，
+# 把下面这一行插入配置树并挂载插件入口（lib/index.js）。
+#
+# 注意：name 必须与 package.json 的 name 完全一致（按包名解析）；
+# id 是稳定标识，用户后续覆盖配置时按 id 定位，不要复用给其他插件。
+- insert:
+    - id: digital-life-core
+      name: 'digital-life-core'

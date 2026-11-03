@@ -1,0 +1,3 @@
+- id: digital-life-core
+  config:
+    statePath: 'D:/DSH_Projects/digital-life-core/.loadtest/state.json'

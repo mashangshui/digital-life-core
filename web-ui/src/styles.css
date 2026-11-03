@@ -1,0 +1,427 @@
+@import "tailwindcss";
+
+/*
+ * 注意：`src/lib/**` 必须留在 Tailwind 的扫描范围内。
+ *
+ * 色板写在 `src/lib/theme.ts`（`REST_STYLE` / `STATUS_STYLE`），类名是普通字符串。
+ * 曾经因为仓库根的 `.gitignore` 写成 `lib/`（会匹配任意层级的 lib 目录），
+ * 这个目录被扫描器整体忽略，于是标签的紫底、器官状态点的绿点全都不生成——
+ * 类名写对了，但样式是透明的。已把那条规则改成 `/lib/` 钉死在仓库根。
+ * 改 .gitignore 时别再写成不带斜杠的目录名。
+ */
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(56, 189, 248, 0.06), transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, rgba(244, 63, 94, 0.05), transparent 60%),
+    #080b10;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ───────────────── 操作手册按钮：霓虹呼吸 ───────────────── */
+
+@keyframes neon-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.28), 0 0 12px -2px rgba(34, 211, 238, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.55), 0 0 22px 0 rgba(34, 211, 238, 0.55);
+  }
+}
+
+.neon-btn {
+  position: relative;
+  overflow: hidden;
+  animation: neon-breathe 3.4s ease-in-out infinite;
+}
+
+/* 掠过按钮的高光：hover 时从左侧扫到右侧，只在 hover 跑，静止时不耗帧 */
+.neon-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(100deg, transparent 20%, rgba(186, 230, 253, 0.35) 50%, transparent 80%);
+  transition: transform 0.7s ease;
+}
+
+.neon-btn:hover::after {
+  transform: translateX(120%);
+}
+
+/* ───────────────── v0.9.6 作息标签 + 睡眠呼吸光晕 ───────────────── */
+
+/* 标签本体：内联 flex 排版，让圆点、图标、文字、速率在同一基线上 */
+.rest-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  /* 描边自带一层外发光，让它在深色面板里"浮起来"——造物主要的就是一眼看见 */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 0 18px -6px currentColor;
+}
+
+/* 呼吸圆点：睡着时慢（4.6s），清醒时快而轻 */
+.rest-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  animation: rest-dot-breathe 4.6s ease-in-out infinite;
+  box-shadow: 0 0 8px 1px currentColor;
+}
+
+@keyframes rest-dot-breathe {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rest-dot {
+    animation: none;
+  }
+}
+
+/*
+ * 脉冲图外圈的睡眠光晕。
+ *
+ * 只画一圈极淡的紫——--breath-ms 由组件按状态注入（深睡 4.6s / 夜休 6s），
+ * 与 canvas 里那层径向渐变同频，两层不会错拍。
+ */
+.is-sleeping::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 14px;
+  pointer-events: none;
+  animation: sleep-halo var(--breath-ms, 4600ms) ease-in-out infinite;
+}
+
+@keyframes sleep-halo {
+  0%, 100% {
+    box-shadow: 0 0 22px -8px rgba(167, 139, 250, 0.25);
+    opacity: 0.55;
+  }
+  50% {
+    box-shadow: 0 0 40px -4px rgba(167, 139, 250, 0.45);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-sleeping::before {
+    animation: none;
+    box-shadow: 0 0 26px -6px rgba(167, 139, 250, 0.3);
+  }
+}
+
+/* ───────────────── 手册抽屉：内部滚动条 ───────────────── */
+
+.manual-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.35) transparent;
+}
+
+.manual-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.manual-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.manual-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.45), rgba(129, 140, 248, 0.35));
+}
+
+.manual-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.7), rgba(129, 140, 248, 0.55));
+}
+
+/* ───────────────── 手册正文：Markdown 排版 ───────────────── */
+
+.manual-body {
+  font-size: 13px;
+  line-height: 1.75;
+  color: #cbd5e1;
+  word-wrap: break-word;
+}
+
+.manual-body > :first-child {
+  margin-top: 0;
+}
+
+.manual-body h1,
+.manual-body h2,
+.manual-body h3,
+.manual-body h4 {
+  color: #e2e8f0;
+  font-weight: 600;
+  line-height: 1.35;
+  scroll-margin-top: 12px;
+}
+
+.manual-body h1 {
+  margin: 1.4em 0 0.8em;
+  padding-bottom: 0.45em;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  color: #a5f3fc;
+  text-shadow: 0 0 18px rgba(34, 211, 238, 0.35);
+  border-bottom: 1px solid rgba(34, 211, 238, 0.25);
+}
+
+.manual-body h2 {
+  position: relative;
+  margin: 1.6em 0 0.6em;
+  padding-left: 0.65em;
+  font-size: 16px;
+  color: #bae6fd;
+}
+
+/* 标题左侧的霓虹竖条：比整行下划线克制，长文档里不容易变成横纹噪点 */
+.manual-body h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.22em;
+  bottom: 0.22em;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #22d3ee, rgba(129, 140, 248, 0.35));
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.55);
+}
+
+.manual-body h3 {
+  margin: 1.3em 0 0.45em;
+  font-size: 14px;
+  color: #cbd5e1;
+}
+
+.manual-body h4 {
+  margin: 1.1em 0 0.4em;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.manual-body p {
+  margin: 0.6em 0;
+}
+
+.manual-body strong {
+  color: #a5f3fc;
+  font-weight: 600;
+}
+
+.manual-body em {
+  color: #c4b5fd;
+}
+
+.manual-body a {
+  color: #67e8f9;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(103, 232, 249, 0.45);
+}
+
+.manual-body a:hover {
+  color: #a5f3fc;
+  border-bottom-color: rgba(165, 243, 252, 0.85);
+}
+
+.manual-body ul,
+.manual-body ol {
+  margin: 0.55em 0;
+  padding-left: 1.35em;
+}
+
+.manual-body ul {
+  list-style: none;
+}
+
+.manual-body ul > li {
+  position: relative;
+}
+
+.manual-body ul > li::before {
+  content: "";
+  position: absolute;
+  left: -0.95em;
+  top: 0.68em;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.75);
+  box-shadow: 0 0 6px rgba(34, 211, 238, 0.6);
+}
+
+.manual-body ol {
+  list-style: decimal;
+}
+
+.manual-body ol > li::marker {
+  color: rgba(34, 211, 238, 0.8);
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-body li {
+  margin: 0.22em 0;
+}
+
+.manual-body li > ul,
+.manual-body li > ol {
+  margin: 0.2em 0;
+}
+
+/* 行内代码 */
+.manual-body code {
+  padding: 0.1em 0.35em;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  border-radius: 4px;
+  background: rgba(34, 211, 238, 0.07);
+  color: #a5f3fc;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+/* 代码块：深底 + 左侧霓虹条 + 右上角语言角标（来自 pre[data-lang]） */
+.manual-body pre {
+  position: relative;
+  margin: 0.9em 0;
+  padding: 0.85em 1em 0.85em 1.05em;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-left: 2px solid rgba(34, 211, 238, 0.55);
+  border-radius: 8px;
+  background: rgba(2, 6, 14, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  overflow-x: auto;
+}
+
+.manual-body pre::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.55);
+  pointer-events: none;
+}
+
+.manual-body pre > code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #d7e3f4;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+}
+
+/* 按语言换左侧竖条的颜色：不做到 token 级，但一眼能分出 shell / ts / yaml */
+.manual-body pre[data-lang="bash"] { border-left-color: rgba(74, 222, 128, 0.6); }
+.manual-body pre[data-lang="ts"],
+.manual-body pre[data-lang="tsx"],
+.manual-body pre[data-lang="typescript"] { border-left-color: rgba(96, 165, 250, 0.65); }
+.manual-body pre[data-lang="yaml"],
+.manual-body pre[data-lang="yml"] { border-left-color: rgba(251, 191, 36, 0.6); }
+.manual-body pre[data-lang="json"] { border-left-color: rgba(244, 114, 182, 0.55); }
+
+/* 表格：手册里表格极多，必须能横向滚动且不撑破面板 */
+.manual-table-wrap {
+  margin: 0.9em 0;
+  overflow-x: auto;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.manual-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.manual-body thead th {
+  padding: 0.5em 0.75em;
+  text-align: left;
+  font-weight: 600;
+  color: #a5f3fc;
+  white-space: nowrap;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.12), rgba(34, 211, 238, 0.04));
+  border-bottom: 1px solid rgba(34, 211, 238, 0.25);
+}
+
+.manual-body tbody td {
+  padding: 0.45em 0.75em;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.manual-body tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.manual-body tbody tr:hover {
+  background: rgba(34, 211, 238, 0.06);
+}
+
+/* 引用块：手册里常用来放"注意/边界" */
+.manual-body blockquote {
+  margin: 0.9em 0;
+  padding: 0.5em 0.9em;
+  border-left: 2px solid rgba(129, 140, 248, 0.6);
+  border-radius: 0 6px 6px 0;
+  background: rgba(129, 140, 248, 0.07);
+  color: #cbd5e1;
+}
+
+.manual-body blockquote > :first-child {
+  margin-top: 0;
+}
+
+.manual-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.manual-body hr {
+  margin: 1.6em 0;
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.35), transparent);
+}
+
+.manual-body img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* 任务列表（- [x]）：remark-gfm 会输出 checkbox，默认样式在深色下几乎看不见 */
+.manual-body input[type="checkbox"] {
+  margin-right: 0.4em;
+  accent-color: #22d3ee;
+}

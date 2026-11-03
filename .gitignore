@@ -1,0 +1,48 @@
+# ── 依赖与产物 ──────────────────────────────────────────────
+node_modules/
+web-ui/node_modules/
+
+# 只忽略编译产物这一个目录。写成 `lib/` 会匹配**任意层级**名为 lib 的目录，
+# 于是 web-ui/src/lib/（前端数据契约与色板）一并被忽略——
+# Tailwind 的自动扫描遵守 gitignore，直接导致 theme.ts 里的颜色类名一个都没生成：
+# 作息标签的紫底、器官状态点的绿点全是透明的。加前导斜杠钉死在仓库根。
+/lib/
+
+# 器官宿主测试的编译产物（npm run test:organs 生成）
+.organs-build/
+# WebUI 生产构建
+web-ui/dist/
+# 自举通道的编译产物（宿主装载器官时生成，内容哈希命名）
+web-ui/organs/self-made/.compiled/
+web-ui/organs/attic/.compiled/
+# v0.9.19：调试时临时用来跑桥/WS 的沙盒（日志 + 一次性 state.json）
+web-ui/.tmptest/
+
+# ── 本地运行痕迹（不属于这个包，属于跑它的那台机器）─────────
+*.log
+.loadtest/
+*.tsbuildinfo
+
+# ── WebUI 里的私人素材 ──────────────────────────────────────
+# public/ 下放的是本机跑界面时截的参考图（含她那时的真实读数），
+# 且没有任何代码引用它——不进仓库，clone 下来照样能跑。
+web-ui/public/
+
+# ── 她的私人器官（本机专属，不进开源包）─────────────────────
+# self-made/ 既是默认装载目录，也是她长身体的地方。开源包只发四件核心
+# （clock / memory-v2 / messenger / energy-stipend），她后来自己长的这些
+# 只留在本机；可公开的那一版在 attic/ 里，想要一条 cp 就回来。
+web-ui/organs/self-made/diary.ts
+web-ui/organs/self-made/oxytocin.ts
+web-ui/organs/self-made/system-sensor.ts
+web-ui/organs/self-made/weather.ts
+web-ui/organs/self-made/energy-bonus.ts
+
+# ── 编辑器 / 操作系统 ────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+state.json
+biomemory.db

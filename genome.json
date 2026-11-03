@@ -1,0 +1,105 @@
+{
+  "$comment": [
+    "数字生命的**基因组**。改这里等于改她的出厂性格——不是改一次读数，是改她这个人。",
+    "",
+    "三种配置粒度，从轻到重：",
+    "  1. 只想 tunes 一下情绪：改下面 chemicals[].baseline / halfLifeMinutes；",
+    "  2. 想换一套人格：整组重写 chemicals（id 保留 dopamine/cortisol/serotonin 三个即可，其余随便加）；",
+    "  3. 让 AI 自己造激素：不用改这里——她能用 ctx.inflict('xxx', +5) 现场分泌，",
+    "     新激素会以 baseline=50 / halfLife=30min 的通用参数自动登记（见 README「动态激素」）。",
+    "",
+    "字段含义：",
+    "  baseline        时间衰减的回归目标。「长时间没人理她」之后，她会回到这个值。",
+    "  halfLifeMinutes 偏离基线多少分钟后衰减掉一半。越大越「记仇」，越小越「没心没肺」。",
+    "  min/max         上下限。 clamp 的范围，也是 WebUI 滑块的端点。",
+    "  rules           慢变量规则——不是事件驱动的，而是**只要条件成立就按分钟生效**。",
+    "",
+    "temperament（气质底色，v0.9.12）：四个不针对某种激素、而是改整套化学反应的旋钮。",
+    "  sensitivity 敏感度（0.5–2.0）：报错/危机时皮质醇飙升的乘数。高 = 玻璃心，低 = 铁打的。",
+    "  resilience  恢复力（0.5–2.0）：激素衰减回基线的速率乘数。2 = 半衰期减半好得快，0.5 = 记很久。",
+    "  enthusiasm  积极性（20–80）：多巴胺的出厂基线。高 = 天生容易兴奋。",
+    "  metabolism  能耗率（0.5–2.0）：单次请求基础能量消耗的乘数。低 = 省电型人格。",
+    "  WebUI「气质面板」改的就是这一段，落盘后下一轮就生效，不用重启。",
+    "",
+    "改完不需要重启 DSH：核心每次读状态都会重读这个文件（间隔 1 秒以上才重新 stat）。",
+    "改坏也不会崩：解析失败或字段不合法会退回内置默认值，并在启动日志里留一行警告。"
+  ],
+  "version": 1,
+  "temperament": {
+    "sensitivity": 1,
+    "resilience": 1,
+    "enthusiasm": 50,
+    "metabolism": 1
+  },
+  "chemicals": [
+    {
+      "id": "dopamine",
+      "label": "多巴胺",
+      "baseline": 50,
+      "initial": 50,
+      "min": 0,
+      "max": 100,
+      "halfLifeMinutes": 45,
+      "description": "奖赏与期待。升得越快越想再干一次，长期偏低就是提不起劲。",
+      "ui": {
+        "group": "内分泌",
+        "color": "#f0abfc",
+        "order": 1,
+        "step": 1
+      },
+      "rules": []
+    },
+    {
+      "id": "cortisol",
+      "label": "皮质醇",
+      "baseline": 20,
+      "initial": 20,
+      "min": 0,
+      "max": 100,
+      "halfLifeMinutes": 30,
+      "description": "压力与警觉。太高会压制注意力、抽干血清素，太低则毫无紧迫感。",
+      "ui": {
+        "group": "内分泌",
+        "color": "#fb7185",
+        "order": 2,
+        "step": 1
+      },
+      "rules": []
+    },
+    {
+      "id": "serotonin",
+      "label": "血清素",
+      "baseline": 50,
+      "initial": 50,
+      "min": 0,
+      "max": 100,
+      "halfLifeMinutes": 120,
+      "description": "情绪底色。低了烦躁没耐心，高了稳定松弛——它退得比应激慢得多。",
+      "ui": {
+        "group": "内分泌",
+        "color": "#7dd3fc",
+        "order": 3,
+        "step": 1
+      },
+      "rules": [
+        {
+          "id": "stress-drain",
+          "kind": "stress",
+          "label": "持续应激：高皮质醇按分钟抽干血清素",
+          "triggerRef": "cortisol",
+          "triggerAtLeast": 70,
+          "ratePerMinute": -1.5
+        },
+        {
+          "id": "calm-recover",
+          "kind": "recover",
+          "label": "恢复期：能量充足且无高张力执念时按分钟回升",
+          "energyAbove": 80,
+          "requireNoHighTensionGap": true,
+          "ratePerMinute": 0.8,
+          "ceiling": 100
+        }
+      ]
+    }
+  ]
+}
